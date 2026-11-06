@@ -56,3 +56,9 @@ Pictures/
 
 # Tools and packages copied by prepare-usb.bat
 vendor/
+
+# Synthetic batches for live demonstrations (tools/seed_demo.py)
+demo/
+
+# Packages generated for submission
+entrega/
