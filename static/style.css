@@ -590,11 +590,13 @@ button:disabled, button:disabled:hover { background: #c6c6c6 !important; color: 
 
 .region-editor { display: flex; flex-direction: column; gap: 12px; }
 .region-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* The stage takes exactly the image's size: regions are fractions of the stage, so any
+   extra width would shift them away from the fields drawn on the slip. */
 .region-stage {
-  position: relative; align-self: flex-start; max-width: 100%;
+  position: relative; align-self: flex-start; width: min(100%, 1100px);
   background: var(--layer-accent); line-height: 0; user-select: none; touch-action: none;
 }
-.region-stage img { max-width: min(100%, 1100px); height: auto; display: block; pointer-events: none; }
+.region-stage img { width: 100%; height: auto; display: block; pointer-events: none; }
 .region-stage.drawing { cursor: crosshair; outline: 2px dashed var(--interactive); outline-offset: 4px; }
 .region-boxes { position: absolute; inset: 0; pointer-events: none; }
 .region-box { position: absolute; border: 3px solid; line-height: 1.2; animation: pop 240ms var(--ease-expressive) both; }
