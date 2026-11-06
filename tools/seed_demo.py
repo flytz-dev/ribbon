@@ -132,6 +132,25 @@ def _in_portuguese(scenario):
     return scenario
 
 
+# How each page of guias-tortas.pdf is moved: (right, down) as fractions of the page, and degrees.
+CROOKED_PAGES = [(0, -0.05, 0), (0.08, 0, 0), (0, 0.05, 0), (-0.05, 0, 0), (0, 0, 2),
+                 (0, 0, -2), (0.05, -0.04, 0), (-0.04, 0.04, 1), (0.06, 0.03, -1.5)]
+
+
+def write_crooked_copy(source, target):
+    """The same slips, shifted and rotated as if placed carelessly on the scanner."""
+    from PIL import Image
+    pages = engine.pdf2image.convert_from_path(source, dpi=samples.SCAN_DPI, **engine._poppler_kwargs())
+    moved = []
+    for index, page in enumerate(pages):
+        dx, dy, angle = CROOKED_PAGES[index % len(CROOKED_PAGES)]
+        page = page.convert("L")
+        canvas = Image.new("L", page.size, 255)
+        canvas.paste(page, (round(dx * page.width), round(dy * page.height)))
+        moved.append(canvas.rotate(angle, resample=Image.BICUBIC, fillcolor=255) if angle else canvas)
+    moved[0].save(target, save_all=True, append_images=moved[1:], resolution=samples.SCAN_DPI)
+
+
 # Portuguese file names, so the master list and the slips are not confused when uploading.
 LIVE_FILE_NAMES = {"reference": "lista-mestre.pdf", "payment_slips": "guias.pdf", "ground_truth": "gabarito.csv"}
 
@@ -161,6 +180,9 @@ def write_live_batches():
         model = note or f"modelo: {profiles.get_profile(STYLE_PROFILE[style]).name}"
         lines.append(f"{name}/  ({model})")
         lines.append(f"  - lista mestre com {slips} linhas; {dataset['pages']} guias")
+        if style == "municipal":
+            write_crooked_copy(os.path.join(folder, "guias.pdf"), os.path.join(folder, "guias-tortas.pdf"))
+            lines.append("  - guias-tortas.pdf: as mesmas guias, deslocadas até 8% e giradas até 2 graus")
         lines.extend(f"  - {_in_portuguese(item)}" for item in dataset["scenario"])
         lines.append("")
     with open(os.path.join(DEMO_DIR, "LEIA-ME.txt"), "w", encoding="utf-8") as file:
