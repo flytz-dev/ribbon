@@ -310,7 +310,7 @@ def _fake_strategies(monkeypatch, readings):
 
     calls = []
 
-    def fake_read(_img, index):
+    def fake_read(_img, index, _profile=None):
         calls.append(index)
         return readings[index] if index < len(readings) else _fields()
 
@@ -344,7 +344,7 @@ def test_strategy_coordinates_map_back_to_the_original_page(monkeypatch):
 
     zoom = [name for name, _apply in engine.STRATEGIES].index("5. Zoom 2x")
     monkeypatch.setattr(
-        engine, "extract_image_fields", lambda _img: {**_fields("113640", "76,82"), "code_box": (40, 20, 80, 60)}
+        engine, "extract_image_fields", lambda _img, _profile=None: {**_fields("113640", "76,82"), "code_box": (40, 20, 80, 60)}
     )
 
     fields = engine._read_with_strategy(Image.new("L", (100, 100)), zoom)

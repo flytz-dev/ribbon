@@ -1,0 +1,24 @@
+{
+  "id": "exemplo-codigo-z",
+  "name": "Exemplo: código 54700-Z e valores acima de mil",
+  "description": "Matrículas como 54700-Z e valores como 123.766,01. O código e o valor são lidos em regiões próprias da guia, então a multa e a data de vencimento não entram na leitura.",
+  "reference": {
+    "code": "\\b(?P<code>\\d{3,6})-Z\\b",
+    "amount": "\\b\\d{1,3}(?:\\.\\d{3})*,\\d{2}\\b",
+    "pairing": "line"
+  },
+  "slip": {
+    "scope": "line",
+    "code": {
+      "pattern": "\\b(?P<code>\\d{3,6})\\s?-?\\s?[Z2]\\b",
+      "allowed": "0123456789-Z",
+      "region": [0.03, 0.21, 0.50, 0.29]
+    },
+    "amount": {
+      "pattern": "\\b\\d{1,3}(?:[.\\s]?\\d{3})*[.,]\\d{2}\\b",
+      "allowed": "0123456789.,",
+      "region": [0.03, 0.375, 0.50, 0.47]
+    }
+  },
+  "comparison": "\\d{3,6}"
+}

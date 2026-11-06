@@ -1,8 +1,14 @@
 """Synthetic payment slips for demonstrations and benchmarks.
 
-The generated documents imitate the fields the engine reads (a 16-digit numeric line
-ending in the registration code, and an amount) without any taxpayer data. A ground
-truth file records what is printed on each slip, so OCR accuracy can be measured."""
+The generated documents imitate the fields the engine reads without any taxpayer data.
+Two layouts are available, one per document profile:
+
+- "padrao": a 16-digit numeric line ending in the registration code (master list:
+  11364-0) and amounts up to 999,99;
+- "codigo-z": codes such as 54700-Z, amounts from 1.000,00, and a late fee printed
+  above the amount, which only a region in the profile keeps out of the reading.
+
+A ground truth file records what is printed on each slip, so OCR accuracy can be measured."""
 
 import csv
 import io
@@ -19,6 +25,9 @@ PRINTED_FONTS = ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "H
 HANDWRITING_FONTS = ("Inkfree.ttf", "segoesc.ttf", "segoepr.ttf", "comic.ttf")
 
 REFERENCE_LINES_PER_PAGE = 40
+
+# Synthetic layouts, named after the document profile that reads them.
+STYLES = ("padrao", "codigo-z")
 
 
 def _font(candidates, size):
@@ -41,7 +50,24 @@ def handwriting_available() -> bool:
     return False
 
 
-def _random_entry(rng, used_codes):
+def format_amount(integer, cents):
+    """Write an amount as 123.766,01."""
+    return f"{integer:,}".replace(",", ".") + f",{cents:02d}"
+
+
+def _random_amount(rng, style):
+    if style == "codigo-z":
+        return format_amount(rng.randint(1000, 999999), rng.randint(0, 99))
+    return f"{rng.randint(10, 999)},{rng.randint(0, 99):02d}"
+
+
+def _random_entry(rng, used_codes, style="padrao"):
+    if style == "codigo-z":
+        while True:
+            code = f"{rng.randint(100, 999)}00"
+            if code not in used_codes:
+                used_codes.add(code)
+                return {"code": code, "amount": _random_amount(rng, style)}
     while True:
         base = rng.randint(1000, 9999) if rng.random() < 0.2 else rng.randint(10000, 99999)
         code = f"{base}0"
@@ -61,8 +87,10 @@ def _draw_handwritten(draw, position, text, font, rng):
         x += draw.textlength(character, font=font) * rng.uniform(0.95, 1.12)
 
 
-def render_slip(code, amount, rng, handwritten=False):
+def render_slip(code, amount, rng, handwritten=False, style="padrao"):
     """Render one degraded, scanned-looking slip as a grayscale image."""
+    if style == "codigo-z":
+        return _render_code_z_slip(code, amount, rng, handwritten)
     width, height = (round(side * SCAN_DPI) for side in SLIP_SIZE_INCHES)
     image = Image.new("L", (width, height), 255)
     draw = ImageDraw.Draw(image)
@@ -89,14 +117,54 @@ def render_slip(code, amount, rng, handwritten=False):
         draw.text((margin, margin + 280), numeric_line, font=field, fill=0)
         draw.text((margin, margin + 570), amount, font=field, fill=0)
 
-    # Barcode-like stripes add realistic clutter around the fields.
+    return _finish_scan(image, draw, rng, margin)
+
+
+def _render_code_z_slip(code, amount, rng, handwritten):
+    """A second layout: code 54700-Z, a late fee above the amount, and the due date beside it.
+
+    Read as a whole page, the late fee comes first and would be taken for the amount;
+    the codigo-z profile reads the amount from its own region instead."""
+    width, height = (round(side * SCAN_DPI) for side in SLIP_SIZE_INCHES)
+    image = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(image)
+    margin = 110
+
+    label = _font(PRINTED_FONTS, 34)
+    title = _font(PRINTED_FONTS, 52)
+    field = _font(HANDWRITING_FONTS, 92) if handwritten else _font(PRINTED_FONTS, 60)
+
+    draw.rectangle((margin - 30, margin - 30, width - margin + 30, height - margin + 30), outline=0, width=4)
+    draw.text((margin, margin), "COLLECTION FORM - SYNTHETIC SAMPLE", font=title, fill=0)
+    draw.text((margin, margin + 90), "Generated for testing. Contains no taxpayer data.", font=label, fill=70)
+
+    draw.text((margin, margin + 230), "Registration", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 230), "Late fee", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 280), _random_amount(rng, "codigo-z"), font=field, fill=0)
+    draw.text((margin, margin + 520), "Amount due", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 520), "Due date", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 570), f"{rng.randint(10, 28)}/{rng.randint(10, 12)}/2026", font=field, fill=0)
+
+    printed_code = f"{code}-Z"
+    if handwritten:
+        _draw_handwritten(draw, (margin, margin + 280), printed_code, field, rng)
+        _draw_handwritten(draw, (margin, margin + 570), amount, field, rng)
+    else:
+        draw.text((margin, margin + 280), printed_code, font=field, fill=0)
+        draw.text((margin, margin + 570), amount, font=field, fill=0)
+
+    return _finish_scan(image, draw, rng, margin)
+
+
+def _finish_scan(image, draw, rng, margin):
+    """Add barcode-like clutter, then imitate a scan: skew, blur, speckles, and JPEG."""
+    width, height = image.size
     x = margin
     while x < width - margin:
         stripe = rng.choice((3, 5, 8))
         draw.rectangle((x, height - margin - 150, x + stripe, height - margin - 30), fill=0)
         x += stripe + rng.choice((4, 6, 9))
 
-    # Imitate a scan: slight skew, blur, speckles, and JPEG compression.
     image = image.rotate(rng.uniform(-0.8, 0.8), resample=Image.BICUBIC, fillcolor=255, expand=False)
     image = image.filter(ImageFilter.GaussianBlur(rng.uniform(0.5, 1.1)))
     pixels = image.load()
@@ -145,22 +213,25 @@ def write_text_pdf(path, pages):
         file.write(output)
 
 
-def generate_dataset(directory, slips=10, seed=0, handwritten=False, discrepancies=True, remove_slip=True):
+def generate_dataset(directory, slips=10, seed=0, handwritten=False, discrepancies=True, remove_slip=True,
+                     style="padrao"):
     """Create payment_slips.pdf, reference.pdf, and ground_truth.csv in directory.
 
     With discrepancies, the batch includes a wrong amount on a slip, a missing slip
     (unless remove_slip is False), and two swapped slips, so the report exercises
-    every matching path."""
+    every matching path. style picks the layout (see STYLES)."""
+    if style not in STYLES:
+        raise ValueError(f"Unknown sample style: {style}")
     rng = random.Random(seed)
     used_codes = set()
-    reference = [_random_entry(rng, used_codes) for _ in range(slips)]
+    reference = [_random_entry(rng, used_codes, style) for _ in range(slips)]
     printed = [dict(entry) for entry in reference]
     scenario = []
 
     changed = None
     if discrepancies and slips >= 2:
         changed = rng.randrange(len(printed))
-        printed[changed]["amount"] = f"{rng.randint(10, 999)},{rng.randint(0, 99):02d}"
+        printed[changed]["amount"] = _random_amount(rng, style)
         scenario.append(f"Slip for reference line {changed + 1} shows a different amount")
     if discrepancies and remove_slip and slips >= 4:
         index = rng.choice([i for i in range(1, len(printed) - 1) if i != changed])
@@ -178,10 +249,14 @@ def generate_dataset(directory, slips=10, seed=0, handwritten=False, discrepanci
         "ground_truth": os.path.join(directory, "ground_truth.csv"),
     }
 
-    images = [render_slip(entry["code"], entry["amount"], rng, handwritten) for entry in printed]
+    images = [render_slip(entry["code"], entry["amount"], rng, handwritten, style) for entry in printed]
     images[0].save(paths["payment_slips"], save_all=True, append_images=images[1:], resolution=SCAN_DPI)
 
-    lines = ["Registration     Amount due"] + [f"{entry['code'][:-1]}-0     {entry['amount']}" for entry in reference]
+    if style == "codigo-z":
+        listed = [f"{entry['code']}-Z     {entry['amount']}" for entry in reference]
+    else:
+        listed = [f"{entry['code'][:-1]}-0     {entry['amount']}" for entry in reference]
+    lines = ["Registration     Amount due"] + listed
     write_text_pdf(paths["reference"], [
         lines[start:start + REFERENCE_LINES_PER_PAGE]
         for start in range(0, len(lines), REFERENCE_LINES_PER_PAGE)

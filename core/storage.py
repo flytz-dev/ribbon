@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS audit (
     reference_file TEXT,
     total_pages    INTEGER,
     owner          TEXT,
-    duration_seconds REAL
+    duration_seconds REAL,
+    profile        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS page (
@@ -92,6 +93,7 @@ ADDED_COLUMNS = (
     ("page", "ocr_ms", "INTEGER"),
     ("page", "review", "TEXT"),
     ("audit", "owner", "TEXT"),
+    ("audit", "profile", "TEXT"),
     ("audit", "duration_seconds", "REAL"),
 )
 
@@ -174,13 +176,13 @@ def create_schema() -> None:
 # Audits and report rows
 # ==========================================
 
-def register_audit(job_id, created_at, dpi, payment_slips_file, reference_file, owner=None) -> None:
+def register_audit(job_id, created_at, dpi, payment_slips_file, reference_file, owner=None, profile=None) -> None:
     with _connection() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO audit "
-            "(job_id, created_at, status, dpi, payment_slips_file, reference_file, total_pages, owner) "
-            "VALUES (?, ?, 'processing', ?, ?, ?, NULL, ?)",
-            (job_id, created_at, dpi, payment_slips_file, reference_file, owner),
+            "(job_id, created_at, status, dpi, payment_slips_file, reference_file, total_pages, owner, profile) "
+            "VALUES (?, ?, 'processing', ?, ?, ?, NULL, ?, ?)",
+            (job_id, created_at, dpi, payment_slips_file, reference_file, owner, profile),
         )
 
 
@@ -263,6 +265,8 @@ SELECT a.job_id,
        a.total_pages,
        a.dpi,
        a.owner,
+       a.profile,
+       a.payment_slips_file,
        a.duration_seconds,
        COUNT(p.page)                                              AS processed_pages,
        COALESCE(SUM(p.overall_status = 'OK'), 0)                      AS matched,

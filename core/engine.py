@@ -16,7 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pdf2image
 import pypdf
 import pytesseract
-from PIL import ImageDraw, ImageEnhance, ImageFilter
+from PIL import ImageDraw, ImageEnhance, ImageFilter, ImageOps
+
+from core.profiles import DEFAULT_PROFILE
 
 # ==========================================
 # External tool and input paths
@@ -55,7 +57,8 @@ TESSERACT_PATH = default_tesseract_path()
 POPPLER_PATH = default_poppler_path()
 
 DEFAULT_DPI = 500
-TESSERACT_CONFIG = r'--psm 6 -c tessedit_char_whitelist=0123456789,. -c classify_bln_numeric_mode=1 -c tessedit_char_blacklist=IlOo'
+# Whole-page Tesseract options of the built-in profile; each profile builds its own.
+TESSERACT_CONFIG = DEFAULT_PROFILE.tesseract_config(DEFAULT_PROFILE.page_allowed)
 
 # Pages are read in parallel by a pool shared across audits, so concurrent users
 # divide the same CPU budget instead of each starting their own workers.
@@ -88,61 +91,35 @@ configure_paths(TESSERACT_PATH, POPPLER_PATH)
 # Field extraction and comparison
 # ==========================================
 
-def extract_reference_list(reference_path):
-    """Read reference codes and amounts using positional pairing within each page."""
-    print("Reading codes and amounts from the reference PDF...")
+def extract_reference_list(reference_path, profile=None):
+    """Read reference codes and amounts, pairing them as the document profile says."""
+    profile = profile or DEFAULT_PROFILE
+    print(f"Reading codes and amounts from the reference PDF (profile: {profile.id})...")
     entries = []
     try:
         reader = pypdf.PdfReader(reference_path)
         for page in reader.pages:
             text = page.extract_text()
             if not text: continue
-
-            raw_codes = re.findall(r'\b(\d{4,5})-0\b', text)
-            raw_amounts = re.findall(r'\b\d{2,3},\d{2}\b', text)
-            max_len = max(len(raw_codes), len(raw_amounts))
-
-            for k in range(max_len):
-                registration_code = raw_codes[k] + "0" if k < len(raw_codes) else "N/A"
-                amount = raw_amounts[k] if k < len(raw_amounts) else "N/A"
-                entries.append({"code": registration_code, "amount": amount})
+            entries.extend(profile.reference_entries(text))
     except Exception as e:
         print(f"Failed to read reference PDF: {e}")
     return entries
 
 
-def _comparable_suffix(code: str) -> str:
-    """Extract the five- or six-digit registration suffix ending in zero."""
-    for length in (6, 5):
-        suffix = code[-length:]
-        if len(suffix) == length and suffix.endswith("0"):
-            return suffix
-    return ""
-
-
-def code_status(read_code: str, expected_code: str):
-    """Compare registration suffixes exactly.
+def code_status(read_code: str, expected_code: str, profile=None):
+    """Compare canonical registration codes exactly.
 
     Digit substitutions can identify a different real registration, so OCR ambiguity
     must remain visible for human review instead of being silently accepted."""
-    if not read_code or not expected_code or expected_code == "N/A":
-        return "MISMATCH"
-
-    read_suffix = _comparable_suffix(read_code)
-    expected_suffix = _comparable_suffix(expected_code)
-
-    return "OK" if (read_suffix and read_suffix == expected_suffix) else "MISMATCH"
+    profile = profile or DEFAULT_PROFILE
+    read = profile.comparable(read_code)
+    return "OK" if read and read == profile.comparable(expected_code) else "MISMATCH"
 
 
-def normalize_amount(extracted_text: str):
-    """Normalize supported OCR decimal separators to the report format: 123,45."""
-    if not extracted_text: return None
-    normalized_text = extracted_text.replace('‚', ',').replace('’', ',').replace('`', ',').replace('´', ',').replace('·', '.')
-    amount_match = re.search(r'\b\d{2,3}[.,]\d{2}\b', normalized_text)
-    if amount_match:
-        amount = amount_match.group(0).replace('.', ',')
-        if int(amount.split(',')[0]) <= 999: return amount
-    return None
+def normalize_amount(extracted_text: str, profile=None):
+    """Normalize an OCR amount to the report format, 1.234,56, or return None."""
+    return (profile or DEFAULT_PROFILE).normalize_amount(extracted_text)
 
 
 def _confidence(value):
@@ -154,43 +131,145 @@ def _confidence(value):
     return round(confidence) if confidence >= 0 else None
 
 
-def extract_image_fields(img_param):
+def _word_box(data, k, offset):
+    dx, dy = offset
+    return (data["left"][k] + dx, data["top"][k] + dy,
+            data["left"][k] + data["width"][k] + dx, data["top"][k] + data["height"][k] + dy)
+
+
+def _union(boxes):
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _ocr_lines(data):
+    """Group OCR words into lines, in reading order: [(text, [(word index, start, end)])]."""
+    words = data.get("text", [])
+    keys = [data.get(name) or [0] * len(words) for name in ("block_num", "par_num", "line_num")]
+    lines = {}
+    for k, word in enumerate(words):
+        word = (word or "").strip()
+        if word:
+            lines.setdefault((keys[0][k], keys[1][k], keys[2][k]), []).append((k, word))
+    result = []
+    for members in lines.values():
+        text, spans = "", []
+        for k, word in members:
+            spans.append((k, len(text), len(text) + len(word)))
+            text += word + " "
+        result.append((text.rstrip(), spans))
+    return result
+
+
+def _find_by_word(data, profile, fields, result, offset):
+    """Original RIBBON matching: one OCR word at a time, the first match wins."""
+    code_rule = profile.slip_code.rule
+    for k, word in enumerate(data.get("text", [])):
+        word = (word or "").strip()
+        if not word:
+            continue
+        box = _word_box(data, k, offset)
+
+        if "code" in fields and result["code"] is None:
+            matches = list(code_rule.pattern.finditer(word))
+            if matches:
+                code = next((c for c in map(code_rule.canonical, matches) if c), None)
+                if code:
+                    result.update(code=code, code_conf=_confidence(data["conf"][k]), code_box=box)
+                # A word shaped like a code is never read as an amount.
+                continue
+
+        if "amount" in fields and result["amount"] is None:
+            amount = profile.normalize_amount(word)
+            if amount:
+                result.update(amount=amount, amount_conf=_confidence(data["conf"][k]), amount_box=box)
+
+
+def _find_by_line(data, profile, fields, result, offset):
+    """Match whole OCR lines, so a code split into words (54700 - Z) is still found."""
+    lines = _ocr_lines(data)
+    used = set()
+    for field in ("code", "amount"):
+        if field not in fields or result[field] is not None:
+            continue
+        rule = profile.slip_code.rule if field == "code" else profile.slip_amount.rule
+        for text, spans in lines:
+            searchable = text if field == "code" else text.translate(str.maketrans("‚’`´·", ",,,,."))
+            for match in rule.pattern.finditer(searchable):
+                value = rule.canonical(match)
+                members = [k for k, start, end in spans if start < match.end() and end > match.start()]
+                if not value or not members or used.intersection(members):
+                    continue
+                confidences = [c for c in (_confidence(data["conf"][k]) for k in members) if c is not None]
+                result.update({
+                    field: value,
+                    f"{field}_conf": min(confidences) if confidences else None,
+                    f"{field}_box": _union([_word_box(data, k, offset) for k in members]),
+                })
+                used.update(members)
+                break
+            if result[field] is not None:
+                break
+
+
+def _find_fields(data, profile, fields, result, offset=(0, 0)):
+    finder = _find_by_word if profile.scope == "word" else _find_by_line
+    finder(data, profile, fields, result, offset)
+
+
+# White margin around a cropped field; Tesseract misreads text that touches the image edge.
+REGION_PADDING = 24
+
+
+def _crop_region(img, region):
+    """Crop a fractional region with a white margin; returns the crop and the offset
+    that maps crop coordinates back onto img."""
+    left, top, right, bottom = region
+    box = (int(left * img.width), int(top * img.height), int(right * img.width), int(bottom * img.height))
+    crop = ImageOps.expand(img.crop(box), border=REGION_PADDING, fill=255)
+    return crop, (box[0] - REGION_PADDING, box[1] - REGION_PADDING)
+
+
+def extract_image_fields(img_param, profile=None):
     """Extract the registration code and amount with Tesseract.
 
-    A single image_to_data call returns the text, each word's confidence, and its
-    location, so previews no longer need a second OCR pass to find the fields."""
+    Fields without a region are read in one whole-page image_to_data call, which also
+    returns each word's confidence and location, so previews need no second OCR pass.
+    A field with a region is read from that crop alone, with its own allowed characters,
+    which keeps other numbers on the page (fees, totals, dates) out of the match."""
+    profile = profile or DEFAULT_PROFILE
     result = {
         "code": None, "amount": None,
         "code_conf": None, "amount_conf": None,
         "code_box": None, "amount_box": None,
     }
+    slip_fields = {"code": profile.slip_code, "amount": profile.slip_amount}
 
-    try:
-        data = pytesseract.image_to_data(
-            img_param, lang='eng', config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT
-        )
-    except Exception:
-        return result
+    page_fields = [name for name, field in slip_fields.items() if field.region is None]
+    if page_fields:
+        try:
+            data = pytesseract.image_to_data(
+                img_param, lang='eng', config=profile.tesseract_config(profile.page_allowed),
+                output_type=pytesseract.Output.DICT,
+            )
+        except Exception:
+            data = None
+        if data:
+            _find_fields(data, profile, page_fields, result)
 
-    for k, word in enumerate(data.get("text", [])):
-        word = (word or "").strip()
-        if not word:
+    for name, field in slip_fields.items():
+        if field.region is None:
             continue
-        box = (data["left"][k], data["top"][k],
-               data["left"][k] + data["width"][k], data["top"][k] + data["height"][k])
-
-        if result["code"] is None:
-            code_match = re.search(r'\b\d{16}\b', word)
-            if code_match:
-                extracted_code = str(int(code_match.group(0)))
-                if 4 <= len(extracted_code) <= 6 and extracted_code.endswith('0'):
-                    result.update(code=extracted_code, code_conf=_confidence(data["conf"][k]), code_box=box)
-                continue
-
-        if result["amount"] is None:
-            amount = normalize_amount(word)
-            if amount:
-                result.update(amount=amount, amount_conf=_confidence(data["conf"][k]), amount_box=box)
+        try:
+            crop, offset = _crop_region(img_param, field.region)
+            data = pytesseract.image_to_data(
+                # Block mode (psm 6): measured on samples, single-line mode (psm 7)
+                # returned nothing for many cropped fields.
+                crop, lang='eng', config=profile.tesseract_config(field.allowed),
+                output_type=pytesseract.Output.DICT,
+            )
+        except Exception:
+            continue
+        _find_fields(data, profile, [name], result, offset)
     return result
 
 
@@ -215,10 +294,10 @@ EMPTY_CODE = "0"
 EMPTY_AMOUNT = "0,00"
 
 
-def _read_with_strategy(img_gray, index):
+def _read_with_strategy(img_gray, index, profile=None):
     """Apply one strategy and map the field locations back to the original page."""
     processed_image = STRATEGIES[index][1](img_gray)
-    fields = extract_image_fields(processed_image)
+    fields = extract_image_fields(processed_image, profile)
     factor = img_gray.width / processed_image.width
     for key in ("code_box", "amount_box"):
         if fields.get(key):
@@ -256,20 +335,20 @@ def vote_readings(readings):
     return result
 
 
-def read_page(img_gray, is_known):
+def read_page(img_gray, is_known, profile=None):
     """Read a page, voting across eight image strategies when needed.
 
     The first strategy is accepted when its code and amount form a pair present in
     the reference list (is_known). Otherwise the remaining strategies run and vote.
     The check does not depend on which slip is expected next, so pages can be read
     in parallel and matched to the reference afterwards, in order."""
-    readings = [(0, _read_with_strategy(img_gray, 0))]
+    readings = [(0, _read_with_strategy(img_gray, 0, profile))]
     first = readings[0][1]
 
     if not (first.get("code") and first.get("amount") and is_known(first["code"], first["amount"])):
         for index in range(1, len(STRATEGIES)):
             try:
-                readings.append((index, _read_with_strategy(img_gray, index)))
+                readings.append((index, _read_with_strategy(img_gray, index, profile)))
             except Exception:
                 pass
 
@@ -294,8 +373,9 @@ class ReferenceMatcher:
     next unused entry after the last pairing: the position where it was expected.
     Each entry is used once; entries never paired are reported as missing slips."""
 
-    def __init__(self, entries):
+    def __init__(self, entries, profile=None):
         self.entries = entries
+        self.profile = profile or DEFAULT_PROFILE
         self.used = [False] * len(entries)
         self.cursor = 0
         self._by_suffix = {}
@@ -306,9 +386,9 @@ class ReferenceMatcher:
                 self._by_suffix.setdefault(suffix, []).append(index)
                 self._pairs.add((suffix, entry["amount"]))
 
-    @staticmethod
-    def _suffix(code):
-        return _comparable_suffix(code) if code and code != "N/A" else ""
+    def _suffix(self, code):
+        """The key codes are matched by: the canonical code, when the profile can compare it."""
+        return self.profile.comparable(code)
 
     def _matchable(self, index):
         return not self.used[index] and bool(self._suffix(self.entries[index]["code"]))
@@ -358,12 +438,12 @@ class ReferenceMatcher:
         ]
 
 
-def compare_reading(reading, entry, matched_by):
+def compare_reading(reading, entry, matched_by, profile=None):
     """Compare a reading with its paired entry and return code, amount, and overall status."""
     if entry is None:
         return "MISMATCH", "MISMATCH", "END OF LIST"
 
-    code_check = code_status(reading["code"], entry["code"])
+    code_check = code_status(reading["code"], entry["code"], profile)
     amount_check = "OK" if reading["amount"] == entry["amount"] else "MISMATCH"
     mismatch = code_check != "OK" or amount_check != "OK" or matched_by == MATCHED_DUPLICATE
     return code_check, amount_check, "ERROR" if mismatch else "OK"
@@ -499,7 +579,7 @@ def _ocr_pool():
         return _POOL
 
 
-def _process_page(payment_slips_path, number, dpi, is_known, include_image):
+def _process_page(payment_slips_path, number, dpi, is_known, include_image, profile=None):
     """Render and read one page; runs on a pool worker."""
     started = time.perf_counter()
     pages = pdf2image.convert_from_path(
@@ -510,7 +590,7 @@ def _process_page(payment_slips_path, number, dpi, is_known, include_image):
     rendered = time.perf_counter()
 
     img_gray = pages[0].convert('L')
-    reading = read_page(img_gray, is_known)
+    reading = read_page(img_gray, is_known, profile)
     finished = time.perf_counter()
 
     page = {
@@ -528,7 +608,7 @@ def _process_page(payment_slips_path, number, dpi, is_known, include_image):
     return page
 
 
-def _process_pages(payment_slips_path, total_pages, dpi, is_known, include_image):
+def _process_pages(payment_slips_path, total_pages, dpi, is_known, include_image, profile=None):
     """Yield processed pages in order while pool workers read the following pages."""
     lookahead = OCR_WORKERS * 2
     pending = deque()
@@ -537,7 +617,7 @@ def _process_pages(payment_slips_path, total_pages, dpi, is_known, include_image
         while pending or next_page <= total_pages:
             while next_page <= total_pages and len(pending) < lookahead:
                 pending.append(_ocr_pool().submit(
-                    _process_page, payment_slips_path, next_page, dpi, is_known, include_image
+                    _process_page, payment_slips_path, next_page, dpi, is_known, include_image, profile
                 ))
                 next_page += 1
             yield pending.popleft().result()
@@ -547,11 +627,12 @@ def _process_pages(payment_slips_path, total_pages, dpi, is_known, include_image
             future.cancel()
 
 
-def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_image=True):
+def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_image=True, profile=None):
     """Yield start, page, and end events, reading pages in parallel and reporting them in order."""
+    profile = profile or DEFAULT_PROFILE
     started = time.perf_counter()
-    reference_list = extract_reference_list(reference_path)
-    matcher = ReferenceMatcher(reference_list)
+    reference_list = extract_reference_list(reference_path, profile)
+    matcher = ReferenceMatcher(reference_list, profile)
 
     info = pdf2image.pdfinfo_from_path(payment_slips_path, **_poppler_kwargs())
     total_pages = info["Pages"]
@@ -562,9 +643,10 @@ def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_im
         "reference_count": len(reference_list),
         "dpi": dpi,
         "workers": OCR_WORKERS,
+        "profile": profile.id,
     }
 
-    for page in _process_pages(payment_slips_path, total_pages, dpi, matcher.is_known, include_image):
+    for page in _process_pages(payment_slips_path, total_pages, dpi, matcher.is_known, include_image, profile):
         if page is None:
             continue
         number = page["number"]
@@ -572,7 +654,7 @@ def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_im
 
         index, matched_by = matcher.match(reading["code"])
         entry = reference_list[index] if index is not None else None
-        code_check, amount_check, overall_status = compare_reading(reading, entry, matched_by)
+        code_check, amount_check, overall_status = compare_reading(reading, entry, matched_by, profile)
         result = {**reading, "code_status": code_check, "amount_status": amount_check,
                   "overall_status": overall_status}
         category = classify_discrepancy(result, matched_by)

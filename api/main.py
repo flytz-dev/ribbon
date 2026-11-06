@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from api import auth
-from core import storage, engine
+from core import storage, engine, profiles
 
 app = FastAPI(
     title="RIBBON API",
@@ -67,6 +67,8 @@ class AuditHistoryEntry(BaseModel):
     mismatched: int
     dpi: int | None = None
     duration_seconds: float | None = None
+    profile: str | None = None
+    payment_slips_file: str | None = None
 
 
 class AuditSummary(BaseModel):
@@ -79,6 +81,8 @@ class AuditSummary(BaseModel):
     created_at: str
     dpi: int | None = None
     duration_seconds: float | None = None
+    profile: str | None = None
+    payment_slips_file: str | None = None
 
 
 class ReviewRequest(BaseModel):
@@ -152,12 +156,13 @@ def _purge_old_audits() -> None:
         AUDITS.pop(job_id, None)
 
 
-def _execute_audit(job_id: str, payment_slips_path: str, reference_path: str, dpi: int, temp_directory: str):
+def _execute_audit(job_id: str, payment_slips_path: str, reference_path: str, dpi: int, temp_directory: str,
+                   profile=None):
     """Run verification in a worker thread and publish per-page events."""
     audit = AUDITS[job_id]
     event_queue = audit["event_queue"]
     try:
-        for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi):
+        for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi, profile=profile):
             if event["type"] == "page":
                 audit["report"].append(event["row"])
                 if event["row"]["Overall Status"] == "OK":
@@ -232,6 +237,7 @@ async def create_audit(
     payment_slips: UploadFile = File(..., description="PDF containing scanned payment slips."),
     reference: UploadFile = File(..., description="Reference PDF containing the master list."),
     dpi: int = Query(500, ge=100, le=600, description="Rendering resolution in dots per inch."),
+    profile: str = Query(profiles.DEFAULT_PROFILE_ID, description="Document profile id (see /api/v1/profiles)."),
     username: str = Depends(auth.current_user),
 ):
     """Upload both PDFs and start a background audit.
@@ -241,6 +247,10 @@ async def create_audit(
     for file in (payment_slips, reference):
         if not (file.filename or "").lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail=f"'{file.filename}' is not a PDF.")
+    try:
+        document_profile = profiles.get_profile(profile)
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Unknown document profile.")
 
     temp_directory = tempfile.mkdtemp(prefix="ribbon_")
     payment_slips_path = f"{temp_directory}/payment_slips.pdf"
@@ -262,6 +272,8 @@ async def create_audit(
         "matched": 0,
         "mismatched": 0,
         "dpi": dpi,
+        "profile": document_profile.id,
+        "payment_slips_file": payment_slips.filename,
         "duration_seconds": None,
         "owner": username,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -271,15 +283,22 @@ async def create_audit(
     _persist(
         storage.register_audit,
         job_id, AUDITS[job_id]["created_at"], dpi, payment_slips.filename, reference.filename, username,
+        document_profile.id,
     )
 
     threading.Thread(
         target=_execute_audit,
-        args=(job_id, payment_slips_path, reference_path, dpi, temp_directory),
+        args=(job_id, payment_slips_path, reference_path, dpi, temp_directory, document_profile),
         daemon=True,
     ).start()
 
     return AuditCreated(job_id=job_id, message="Audit started. Follow the events endpoint.")
+
+
+@app.get("/api/v1/profiles", tags=["Profiles"])
+def list_profiles(username: str = Depends(auth.current_user)):
+    """Document profiles: how the code and amount are found on each model of slip and master list."""
+    return [profile.summary() for profile in profiles.load_profiles().values()]
 
 
 @app.get("/api/v1/audits", response_model=list[AuditHistoryEntry], tags=["Audit"])
@@ -324,6 +343,8 @@ def get_audit(job_id: str, username: str = Depends(auth.current_user)):
             created_at=audit["created_at"],
             dpi=audit.get("dpi"),
             duration_seconds=audit.get("duration_seconds"),
+            profile=audit.get("profile"),
+            payment_slips_file=audit.get("payment_slips_file"),
         )
     return AuditSummary(**_stored_summary(job_id, username))
 

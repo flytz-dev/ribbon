@@ -5,6 +5,7 @@ Examples (run from the project root):
     python -m tools.benchmark --samples 12
     python -m tools.benchmark --samples 6 --handwritten
     python -m tools.benchmark --payment-slips slips.pdf --reference reference.pdf --ground-truth truth.csv
+    python -m tools.benchmark --samples 8 --profile exemplo-codigo-z --style codigo-z
 
 The ground truth is a semicolon-separated file with columns page;code;amount describing
 what is actually printed on each slip. It is what separates OCR errors from genuine
@@ -17,27 +18,27 @@ import sys
 import tempfile
 import time
 
-from core import engine, samples
+from core import engine, profiles, samples
 
 
-def expected_outcomes(truth, reference_list):
+def expected_outcomes(truth, reference_list, profile=None):
     """Apply the engine's matching rules to the true slip contents.
 
     Returns the status each page should receive with perfect OCR, and the reference
     lines that really have no slip."""
-    matcher = engine.ReferenceMatcher(reference_list)
+    matcher = engine.ReferenceMatcher(reference_list, profile)
     statuses = {}
     for page in sorted(truth):
         reading = truth[page]
         index, matched_by = matcher.match(reading["code"])
         entry = reference_list[index] if index is not None else None
-        statuses[page] = engine.compare_reading(reading, entry, matched_by)[2]
+        statuses[page] = engine.compare_reading(reading, entry, matched_by, profile)[2]
     return statuses, {entry["line"] for entry in matcher.missing()}
 
 
-def evaluate(rows, missing, truth, reference_list):
+def evaluate(rows, missing, truth, reference_list, profile=None):
     """Score one audit: OCR field accuracy and discrepancy detection against the truth."""
-    expected, expected_missing = expected_outcomes(truth, reference_list)
+    expected, expected_missing = expected_outcomes(truth, reference_list, profile)
     scored = [row for row in rows if row["Page"] in truth]
 
     def flagged(status):
@@ -64,11 +65,11 @@ def _ratio(part, total):
     return part / total if total else None
 
 
-def run(payment_slips, reference, dpi):
+def run(payment_slips, reference, dpi, profile=None):
     """Run one audit without previews and return its rows, missing slips, and timing."""
     rows, missing, elapsed = [], [], None
     started = time.perf_counter()
-    for event in engine.stream_audit(payment_slips, reference, dpi=dpi, include_image=False):
+    for event in engine.stream_audit(payment_slips, reference, dpi=dpi, include_image=False, profile=profile):
         if event["type"] == "page":
             rows.append(event["row"])
         elif event["type"] == "end":
@@ -144,11 +145,19 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=7, help="Random seed for synthetic slips.")
     parser.add_argument("--dpi", type=int, nargs="+", default=[200, 300, 500], help="Resolutions to compare.")
     parser.add_argument("--output", help="Optional CSV file for the summary.")
+    parser.add_argument("--profile", default=profiles.DEFAULT_PROFILE_ID, help="Document profile id.")
+    parser.add_argument("--style", choices=samples.STYLES, default="padrao", help="Layout of synthetic slips.")
     args = parser.parse_args(argv)
+    try:
+        profile = profiles.get_profile(args.profile)
+    except KeyError:
+        parser.error(f"unknown profile: {args.profile}")
 
     if args.samples:
         directory = tempfile.mkdtemp(prefix="ribbon_benchmark_")
-        dataset = samples.generate_dataset(directory, args.samples, args.seed, handwritten=args.handwritten)
+        dataset = samples.generate_dataset(
+            directory, args.samples, args.seed, handwritten=args.handwritten, style=args.style
+        )
         payment_slips, reference, ground_truth = dataset["payment_slips"], dataset["reference"], dataset["ground_truth"]
         print(f"Synthetic dataset in {directory}")
         for line in dataset["scenario"]:
@@ -159,14 +168,14 @@ def main(argv=None):
         parser.error("use --samples, or both --payment-slips and --reference")
 
     truth = samples.load_ground_truth(ground_truth) if ground_truth else None
-    reference_list = engine.extract_reference_list(reference)
+    reference_list = engine.extract_reference_list(reference, profile)
 
     results = []
     for dpi in args.dpi:
         print(f"\nRunning at {dpi} DPI with {engine.OCR_WORKERS} OCR workers...", file=sys.stderr)
-        result = run(payment_slips, reference, dpi)
+        result = run(payment_slips, reference, dpi, profile)
         if truth:
-            result["evaluation"] = evaluate(result["rows"], result["missing"], truth, reference_list)
+            result["evaluation"] = evaluate(result["rows"], result["missing"], truth, reference_list, profile)
         results.append(result)
 
     print()
