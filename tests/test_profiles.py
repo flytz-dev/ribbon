@@ -208,6 +208,70 @@ def test_api_lists_profiles(client):
     assert EXAMPLE in listed
 
 
+def test_suggestion_from_one_code_reads_the_layout():
+    profile = profiles.build_profile(profiles.suggest_definition("Prefeitura 2027", "54700-Z"))
+    assert profile.id == "prefeitura-2027"
+    assert profile.reference_entries("54700-Z   123.766,01") == [{"code": "54700", "amount": "123.766,01"}]
+    assert profile.code_from_text("54700 - 2", profile.slip_code.rule) == "54700"
+    assert profile.slip_code.allowed == "0123456789-Z"
+
+
+def test_suggestion_needs_digits():
+    with pytest.raises(profiles.ProfileError, match="code example"):
+        profiles.suggest_definition("x", "ABC")
+
+
+def test_assistant_endpoints_suggest_preview_save_and_delete(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(profiles, "PROFILES_DIR", str(tmp_path / "profiles"))
+    definition = client.post("/api/v1/profiles/suggest", json={"name": "Modelo Z", "code_example": "54700-Z"}).json()
+
+    dataset = samples.generate_dataset(tmp_path / "data", slips=4, seed=2, style="codigo-z", discrepancies=False)
+    with open(dataset["reference"], "rb") as reference:
+        preview = client.post(
+            "/api/v1/profiles/reference-preview",
+            files={"reference": ("lista.pdf", reference, "application/pdf")},
+            data={"definition": json.dumps(definition)},
+        ).json()
+    assert preview["count"] == preview["complete"] == 4
+
+    assert client.post("/api/v1/profiles", json=definition).status_code == 201
+    assert client.get("/api/v1/profiles/modelo-z").json()["name"] == "Modelo Z"
+    assert client.delete("/api/v1/profiles/modelo-z").status_code == 204
+    assert client.get("/api/v1/profiles/modelo-z").status_code == 404
+    assert client.delete("/api/v1/profiles/padrao").status_code == 400
+
+
+def test_slip_preview_reads_with_the_draft_profile(client, monkeypatch):
+    from PIL import Image
+
+    monkeypatch.setattr(engine.pdf2image, "convert_from_path", lambda *args, **kwargs: [Image.new("L", (200, 100), 255)])
+    monkeypatch.setattr(engine, "read_page", lambda image, is_known, profile: {
+        "code": "54700", "amount": "1.234,56", "code_votes": 6, "amount_votes": 8, "strategies_run": 8,
+        "code_box": (10, 10, 50, 20), "amount_box": None,
+    })
+    definition = profiles.suggest_definition("Modelo Z", "54700-Z")
+
+    body = client.post(
+        "/api/v1/profiles/slip-preview",
+        files={"payment_slips": ("guia.pdf", b"%PDF", "application/pdf")},
+        data={"definition": json.dumps(definition)},
+    ).json()
+
+    assert body["code"] == "54700" and body["code_votes"] == 6
+    assert body["page_image"].startswith("data:image/jpeg;base64,")
+
+
+def test_invalid_draft_profiles_are_explained(client):
+    definition = profiles.suggest_definition("x", "54700-Z")
+    definition["slip"]["code"]["region"] = [0.9, 0.1, 0.2, 0.3]
+    response = client.post(
+        "/api/v1/profiles/slip-preview",
+        files={"payment_slips": ("guia.pdf", b"%PDF", "application/pdf")},
+        data={"definition": json.dumps(definition)},
+    )
+    assert response.status_code == 400 and "region" in response.json()["detail"]
+
+
 def test_api_rejects_an_unknown_profile(client):
     files = {"payment_slips": ("a.pdf", b"%PDF", "application/pdf"), "reference": ("b.pdf", b"%PDF", "application/pdf")}
     response = client.post("/api/v1/audits?dpi=300&profile=nao-existe", files=files)

@@ -16,7 +16,7 @@ from datetime import datetime
 import traceback
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -299,6 +299,128 @@ async def create_audit(
 def list_profiles(username: str = Depends(auth.current_user)):
     """Document profiles: how the code and amount are found on each model of slip and master list."""
     return [profile.summary() for profile in profiles.load_profiles().values()]
+
+
+class SuggestionRequest(BaseModel):
+    name: str = ""
+    code_example: str
+
+
+def _build(definition):
+    """Validate a profile definition sent by the setup assistant."""
+    try:
+        return profiles.build_profile(definition)
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _definition_form(raw: str):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="The profile definition is not valid JSON.")
+
+
+def _save_upload(upload: UploadFile, directory: str, name: str) -> str:
+    if not (upload.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail=f"'{upload.filename}' is not a PDF.")
+    path = f"{directory}/{name}"
+    with open(path, "wb") as output:
+        shutil.copyfileobj(upload.file, output)
+    return path
+
+
+@app.post("/api/v1/profiles/suggest", tags=["Profiles"])
+def suggest_profile(body: SuggestionRequest, username: str = Depends(auth.current_user)):
+    """Build a starting profile definition from one code as printed in the master list."""
+    try:
+        return profiles.suggest_definition(body.name, body.code_example)
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/profiles/reference-preview", tags=["Profiles"])
+def preview_reference(
+    reference: UploadFile = File(..., description="A master-list PDF."),
+    definition: str = Form(..., description="Profile definition as JSON."),
+    username: str = Depends(auth.current_user),
+):
+    """Read a master list with a draft profile and return what it finds."""
+    profile = _build(_definition_form(definition))
+    directory = tempfile.mkdtemp(prefix="ribbon_profile_")
+    try:
+        entries = engine.extract_reference_list(_save_upload(reference, directory, "reference.pdf"), profile)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    complete = [entry for entry in entries if entry["amount"] != "N/A" and entry["code"] != "N/A"]
+    return {"count": len(entries), "complete": len(complete), "entries": entries[:200]}
+
+
+@app.post("/api/v1/profiles/slip-preview", tags=["Profiles"])
+def preview_slip(
+    payment_slips: UploadFile = File(..., description="A PDF with at least one slip of this model."),
+    definition: str = Form(..., description="Profile definition as JSON."),
+    page: int = Form(1, ge=1),
+    dpi: int = Form(200, ge=100, le=600),
+    username: str = Depends(auth.current_user),
+):
+    """Render one slip page and read it with a draft profile, running all eight strategies."""
+    profile = _build(_definition_form(definition))
+    directory = tempfile.mkdtemp(prefix="ribbon_profile_")
+    try:
+        path = _save_upload(payment_slips, directory, "payment_slips.pdf")
+        try:
+            pages = engine.pdf2image.convert_from_path(
+                path, dpi=dpi, first_page=page, last_page=page, **engine._poppler_kwargs()
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not render the PDF: {e}")
+        if not pages:
+            raise HTTPException(status_code=400, detail="Page not found.")
+        image = pages[0].convert("L")
+        reading = engine.read_page(image, lambda _code, _amount: False, profile)
+        plain = engine.generate_annotated_image(image, {})["image"]
+        annotated = engine.generate_annotated_image(image, reading)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    return {
+        "page_image": plain,
+        "annotated_image": annotated["image"],
+        "code": reading.get("code"),
+        "amount": reading.get("amount"),
+        "code_votes": reading.get("code_votes"),
+        "amount_votes": reading.get("amount_votes"),
+        "strategies_run": reading.get("strategies_run"),
+        "code_confidence": reading.get("code_conf"),
+        "amount_confidence": reading.get("amount_conf"),
+    }
+
+
+@app.get("/api/v1/profiles/{profile_id}", tags=["Profiles"])
+def get_profile_definition(profile_id: str, username: str = Depends(auth.current_user)):
+    try:
+        return profiles.load_definition(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown document profile.")
+
+
+@app.post("/api/v1/profiles", status_code=201, tags=["Profiles"])
+def save_profile(definition: dict, username: str = Depends(auth.current_user)):
+    """Save a profile definition as profiles/<id>.json, replacing one with the same id."""
+    try:
+        return profiles.save_profile(definition).summary()
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/v1/profiles/{profile_id}", status_code=204, tags=["Profiles"])
+def delete_profile(profile_id: str, username: str = Depends(auth.current_user)):
+    try:
+        profiles.delete_profile(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown document profile.")
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/v1/audits", response_model=list[AuditHistoryEntry], tags=["Audit"])

@@ -50,6 +50,9 @@ const API_MESSAGES = {
   "Sign in to continue.": "Entre para continuar.",
   "Audit not found.": "Auditoria não encontrada.",
   "No pages processed yet.": "Nenhuma página foi processada ainda.",
+  "Unknown document profile.": "Modelo de documento desconhecido.",
+  "The profile definition is not valid JSON.": "As regras do modelo estão incompletas.",
+  "The built-in profile cannot be deleted.": "O modelo padrão não pode ser excluído.",
   "Page not processed yet.": "Esta página ainda não foi processada.",
   "Page not found.": "Página não encontrada.",
 };
@@ -108,6 +111,7 @@ function showApp(username) {
   $("app-content").hidden = false;
   $("user-box").hidden = false;
   showView("dashboard");
+  loadProfiles();
 }
 
 function longDate(date) {
@@ -147,7 +151,7 @@ $("logout-button").addEventListener("click", async () => {
    Views
    ========================================================= */
 
-const VIEWS = ["dashboard", "audit", "metrics"];
+const VIEWS = ["dashboard", "audit", "metrics", "profiles"];
 
 function showView(name) {
   for (const view of VIEWS) {
@@ -155,6 +159,7 @@ function showView(name) {
     $(`tab-${view}`).classList.toggle("active", view === name);
   }
   if (name === "metrics") loadMetrics();
+  if (name === "profiles") loadProfiles();
   if (name === "dashboard") {
     loadHistory();
     loadMetrics();
@@ -193,13 +198,15 @@ auditForm.addEventListener("submit", async (event) => {
 
   const data = new FormData(auditForm);
   const dpi = data.get("dpi") || 500;
+  const profile = data.get("profile") || $("profile-select").value || "padrao";
   data.delete("dpi");
+  data.delete("profile");
 
   startButton.disabled = true;
   startButton.textContent = "Enviando documentos…";
 
   try {
-    const response = await api(`/api/v1/audits?dpi=${dpi}`, { method: "POST", body: data });
+    const response = await api(`/api/v1/audits?dpi=${dpi}&profile=${encodeURIComponent(profile)}`, { method: "POST", body: data });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(errorMessage(error, `Não foi possível iniciar (HTTP ${response.status}).`));
@@ -278,6 +285,7 @@ function followAudit(jobId) {
       counters.total = event.total_pages;
       statusText.textContent = `${event.total_pages} guias encontradas · ${event.reference_count} lançamentos na consulta · ${event.dpi} DPI`;
       $("active-resolution").textContent = `${event.dpi} DPI`;
+      $("active-profile").textContent = profileName(event.profile);
       updateIndicators();
     } else if (event.type === "page") {
       registerPage(event);
@@ -389,6 +397,8 @@ async function loadHistory() {
     tr.className = "row-history";
     tr.innerHTML = `
       <td>${formatTimestamp(audit.created_at)}</td>
+      <td><span class="file-name">${escapeHtml(audit.payment_slips_file || "—")}</span>
+        <span class="profile-name">${escapeHtml(profileName(audit.profile))}</span></td>
       <td><span class="badge ${className}">${escapeHtml(label)}</span></td>
       <td class="numeric">${audit.dpi ?? "—"}</td>
       <td class="numeric">${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
@@ -424,6 +434,7 @@ async function openAudit(audit) {
   currentJobId = audit.job_id;
   counters.total = audit.total_pages;
   $("active-resolution").textContent = audit.dpi ? `${audit.dpi} DPI` : "—";
+  $("active-profile").textContent = profileName(audit.profile);
 
   for (const row of rows) {
     // Historical rows have no images; previews are generated only during a live audit.
@@ -1071,5 +1082,271 @@ async function loadMetrics() {
 }
 
 $("refresh-metrics-button").addEventListener("click", loadMetrics);
+
+/* =========================================================
+   Document profiles: which layout of slip and master list to read
+   ========================================================= */
+
+let profileList = [{ id: "padrao", name: "Guia padrão (matrícula com -0)", description: "", built_in: true }];
+
+function profileName(id) {
+  const profile = profileList.find((item) => item.id === (id || "padrao"));
+  return profile ? profile.name : (id || "Guia padrão");
+}
+
+async function loadProfiles() {
+  try {
+    const response = await api("/api/v1/profiles");
+    if (!response.ok) return;
+    profileList = await response.json();
+  } catch {
+    return;
+  }
+  const select = $("profile-select");
+  const current = select.value || "padrao";
+  select.innerHTML = profileList.map((profile) =>
+    `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`
+  ).join("");
+  select.value = profileList.some((profile) => profile.id === current) ? current : "padrao";
+
+  $("body-profiles").innerHTML = profileList.map((profile) => `
+    <tr>
+      <td><strong>${escapeHtml(profile.name)}</strong><br><span class="profile-name">${escapeHtml(profile.id)}</span></td>
+      <td>${escapeHtml(profile.description)}</td>
+      <td><span class="${profile.built_in ? "badge" : "tag"}">${profile.built_in ? "Embutido" : "Personalizado"}</span></td>
+      <td>${profile.built_in ? "" : `<button type="button" class="link-button" data-delete-profile="${escapeHtml(profile.id)}">Excluir</button>`}</td>
+    </tr>`).join("");
+}
+
+$("body-profiles").addEventListener("click", async (event) => {
+  const button = event.target?.closest?.("[data-delete-profile]");
+  if (!button) return;
+  const id = button.dataset.deleteProfile;
+  if (!window.confirm(`Excluir o modelo "${profileName(id)}"? Auditorias antigas continuam no histórico.`)) return;
+  const response = await api(`/api/v1/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (response.ok) loadProfiles();
+});
+
+/* ---------- setup assistant ---------- */
+
+let draft = null;        // profile definition being built
+let slipFile = null;     // the sample slip, kept to test again after drawing regions
+let markMode = null;     // "code" or "amount" while drawing a region
+let drawing = null;
+
+function setStep(step) {
+  for (const number of [1, 2, 3]) {
+    $(`profile-step-${number}`).classList.toggle("active", number === step);
+    $(`profile-step-${number}`).classList.toggle("done", number < step);
+  }
+}
+
+function resetWizard() {
+  draft = null;
+  slipFile = null;
+  setMarkMode(null);
+  for (const id of ["profile-name", "profile-code-example", "profile-id",
+    "profile-reference-pattern", "profile-slip-pattern", "profile-slip-allowed"]) $(id).value = "";
+  for (const id of ["profile-reference-notice", "profile-slip-notice", "profile-notice"]) $(id).textContent = "";
+  $("profile-reference-result").hidden = true;
+  $("profile-region-editor").hidden = true;
+  $("profile-boxes").innerHTML = "";
+  $("profile-slip-result").innerHTML = "";
+  setStep(1);
+}
+
+$("profile-new-button").addEventListener("click", () => {
+  resetWizard();
+  $("profile-wizard").hidden = false;
+  $("profile-wizard").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("profile-cancel-button").addEventListener("click", () => { $("profile-wizard").hidden = true; });
+
+/** Copy the advanced fields into the draft, so manual edits are kept. */
+function applyAdvanced() {
+  if (!draft) return;
+  const referencePattern = $("profile-reference-pattern").value.trim();
+  const slipPattern = $("profile-slip-pattern").value.trim();
+  const allowed = $("profile-slip-allowed").value.trim();
+  if (referencePattern) draft.reference.code = referencePattern;
+  if (slipPattern) draft.slip.code.pattern = slipPattern;
+  if (allowed) draft.slip.code.allowed = allowed;
+  const name = $("profile-name").value.trim();
+  if (name) draft.name = name;
+  const id = $("profile-id").value.trim();
+  if (id) draft.id = id;
+}
+
+async function ensureDraft() {
+  if (draft) {
+    applyAdvanced();
+    return draft;
+  }
+  const example = $("profile-code-example").value.trim();
+  if (!example) throw new Error("Digite um código como ele aparece na lista mestre, por exemplo 54700-Z.");
+  const response = await api("/api/v1/profiles/suggest",
+    jsonRequest("POST", { name: $("profile-name").value.trim(), code_example: example }));
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorMessage(body, "Não foi possível gerar as regras."));
+  draft = body;
+  $("profile-reference-pattern").value = draft.reference.code;
+  $("profile-slip-pattern").value = draft.slip.code.pattern;
+  $("profile-slip-allowed").value = draft.slip.code.allowed;
+  $("profile-id").value = draft.id;
+  return draft;
+}
+
+$("profile-code-example").addEventListener("change", () => { draft = null; });
+
+$("profile-reference-button").addEventListener("click", async () => {
+  const notice = $("profile-reference-notice");
+  notice.textContent = "";
+  try {
+    await ensureDraft();
+    const file = $("profile-reference-file").files?.[0];
+    if (!file) {
+      notice.textContent = "Regras geradas. Envie um PDF da lista mestre para conferir se elas encontram os lançamentos.";
+      setStep(2);
+      return;
+    }
+    const form = new FormData();
+    form.append("reference", file);
+    form.append("definition", JSON.stringify(draft));
+    const response = await api("/api/v1/profiles/reference-preview", { method: "POST", body: form });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível ler a lista mestre."));
+
+    $("profile-reference-summary").innerHTML = body.count
+      ? `<strong>${body.count}</strong> lançamentos encontrados · <strong>${body.complete}</strong> com código e valor`
+      : "Nenhum lançamento encontrado. Confira o exemplo de código ou ajuste as regras avançadas.";
+    $("body-profile-entries").innerHTML = body.entries.slice(0, 12).map((entry, index) => `
+      <tr><td>${index + 1}</td><td>${escapeHtml(entry.code)}</td><td>${escapeHtml(entry.amount)}</td></tr>`).join("");
+    $("profile-reference-result").hidden = false;
+    if (body.count) setStep(2);
+  } catch (error) {
+    notice.textContent = error.message;
+  }
+});
+
+function describeReading(body) {
+  const votes = (count) => (count ? ` · ${count} de ${body.strategies_run} estratégias` : "");
+  return `
+    <div><i class="marker blue"></i> Código lido: <strong>${escapeHtml(body.code && body.code !== "0" ? body.code : "não encontrado")}</strong>${votes(body.code_votes)}</div>
+    <div><i class="marker green"></i> Valor lido: <strong>${escapeHtml(body.amount && body.amount !== "0,00" ? body.amount : "não encontrado")}</strong>${votes(body.amount_votes)}</div>`;
+}
+
+async function testSlip() {
+  const notice = $("profile-slip-notice");
+  notice.textContent = "";
+  try {
+    await ensureDraft();
+    slipFile = $("profile-slip-file").files?.[0] || slipFile;
+    if (!slipFile) throw new Error("Escolha um PDF com pelo menos uma guia deste modelo.");
+    $("profile-slip-result").innerHTML = '<span class="hint">Lendo a guia com as 8 estratégias…</span>';
+    const form = new FormData();
+    form.append("payment_slips", slipFile);
+    form.append("definition", JSON.stringify(draft));
+    const response = await api("/api/v1/profiles/slip-preview", { method: "POST", body: form });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível ler a guia."));
+    $("profile-page-image").src = body.annotated_image;
+    $("profile-region-editor").hidden = false;
+    $("profile-slip-result").innerHTML = describeReading(body);
+    renderRegions();
+    setStep(body.code && body.code !== "0" && body.amount && body.amount !== "0,00" ? 3 : 2);
+  } catch (error) {
+    $("profile-slip-result").innerHTML = "";
+    notice.textContent = error.message;
+  }
+}
+
+$("profile-slip-button").addEventListener("click", testSlip);
+$("profile-test-button").addEventListener("click", testSlip);
+
+/* Regions are drawn on the page image and stored as fractions of the page. */
+
+function setMarkMode(mode) {
+  markMode = mode;
+  $("profile-mark-code").classList.toggle("active", mode === "code");
+  $("profile-mark-amount").classList.toggle("active", mode === "amount");
+  $("profile-stage").classList.toggle("drawing", Boolean(mode));
+}
+
+$("profile-mark-code").addEventListener("click", () => setMarkMode(markMode === "code" ? null : "code"));
+$("profile-mark-amount").addEventListener("click", () => setMarkMode(markMode === "amount" ? null : "amount"));
+$("profile-clear-regions").addEventListener("click", () => {
+  if (!draft) return;
+  draft.slip.code.region = null;
+  draft.slip.amount.region = null;
+  renderRegions();
+});
+
+function regionBox(region, kind, label) {
+  if (!region) return "";
+  const [left, top, right, bottom] = region.map((value) => value * 100);
+  return `<div class="region-box ${kind}" style="left:${left}%;top:${top}%;width:${right - left}%;height:${bottom - top}%">
+    <span>${label}</span></div>`;
+}
+
+function renderRegions(preview) {
+  if (!draft) return;
+  $("profile-boxes").innerHTML =
+    regionBox(draft.slip.code.region, "code", "Código") +
+    regionBox(draft.slip.amount.region, "amount", "Valor") +
+    (preview ? regionBox(preview, `${markMode} preview`, "") : "");
+}
+
+function pointerFraction(event) {
+  const rect = $("profile-stage").getBoundingClientRect();
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+  return [clamp((event.clientX - rect.left) / rect.width), clamp((event.clientY - rect.top) / rect.height)];
+}
+
+function regionFrom(start, end) {
+  const round = (value) => Math.round(value * 1000) / 1000;
+  return [round(Math.min(start[0], end[0])), round(Math.min(start[1], end[1])),
+    round(Math.max(start[0], end[0])), round(Math.max(start[1], end[1]))];
+}
+
+$("profile-stage").addEventListener("pointerdown", (event) => {
+  if (!markMode || !draft) return;
+  event.preventDefault();
+  drawing = { start: pointerFraction(event) };
+  $("profile-stage").setPointerCapture?.(event.pointerId);
+});
+$("profile-stage").addEventListener("pointermove", (event) => {
+  if (!drawing) return;
+  renderRegions(regionFrom(drawing.start, pointerFraction(event)));
+});
+$("profile-stage").addEventListener("pointerup", (event) => {
+  if (!drawing) return;
+  const region = regionFrom(drawing.start, pointerFraction(event));
+  drawing = null;
+  if (region[2] - region[0] > 0.01 && region[3] - region[1] > 0.01) {
+    draft.slip[markMode].region = region;
+    $("profile-mark-hint").textContent = "Região marcada. Teste a leitura ou marque o outro campo.";
+  }
+  setMarkMode(null);
+  renderRegions();
+});
+
+$("profile-save-button").addEventListener("click", async () => {
+  const notice = $("profile-notice");
+  notice.textContent = "";
+  notice.classList.toggle("success", false);
+  try {
+    await ensureDraft();
+    applyAdvanced();
+    const response = await api("/api/v1/profiles", jsonRequest("POST", draft));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível salvar o modelo."));
+    notice.textContent = `Modelo "${body.name}" salvo. Ele já aparece na escolha do modelo na tela de Auditoria.`;
+    notice.classList.toggle("success", true);
+    await loadProfiles();
+    $("profile-select").value = body.id;
+  } catch (error) {
+    notice.textContent = error.message;
+  }
+});
 
 initSession();

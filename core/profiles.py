@@ -344,14 +344,112 @@ def get_profile(profile_id=None):
     return profile
 
 
+def _profile_path(profile_id):
+    if not isinstance(profile_id, str) or not _PROFILE_ID.match(profile_id):
+        raise KeyError(profile_id)
+    return os.path.join(PROFILES_DIR, f"{profile_id}.json")
+
+
+def load_definition(profile_id):
+    """The stored definition (a dict) of a profile, for viewing or editing."""
+    if profile_id == DEFAULT_PROFILE_ID:
+        return json.loads(json.dumps(DEFAULT_DEFINITION))
+    path = _profile_path(profile_id)
+    if not os.path.isfile(path):
+        raise KeyError(profile_id)
+    with open(path, encoding="utf-8") as file:
+        return json.load(file)
+
+
 def save_profile(data):
     """Validate and store a profile as profiles/<id>.json; returns the built profile."""
     profile = build_profile(data)
     if profile.id == DEFAULT_PROFILE_ID:
         raise ProfileError("id: 'padrao' is reserved for the built-in profile.")
     os.makedirs(PROFILES_DIR, exist_ok=True)
-    path = os.path.join(PROFILES_DIR, f"{profile.id}.json")
-    with open(path, "w", encoding="utf-8") as file:
+    with open(_profile_path(profile.id), "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
         file.write("\n")
     return profile
+
+
+def delete_profile(profile_id):
+    if profile_id == DEFAULT_PROFILE_ID:
+        raise ProfileError("The built-in profile cannot be deleted.")
+    path = _profile_path(profile_id)
+    if not os.path.isfile(path):
+        raise KeyError(profile_id)
+    os.remove(path)
+
+
+# ==========================================
+# Suggesting a profile from examples
+# ==========================================
+
+# Letters OCR confuses with digits; on the slip either one is accepted.
+_CONFUSABLE = {"Z": "[Z2]", "S": "[S5]", "O": "[O0]", "B": "[B8]", "I": "[I1]", "G": "[G6]", "T": "[T7]"}
+_SEPARATORS = ".,/:-"
+
+# Brazilian amounts, with or without the thousands separator: 76,82 · 1.000,00 · 123766,01.
+REFERENCE_AMOUNT = r"(?<![\d.,])\d{1,3}(?:\.?\d{3})*,\d{2}(?!\d)"
+SLIP_AMOUNT = r"(?<!\d)\d{1,3}(?:[.\s]?\d{3})*[.,]\d{2}(?!\d)"
+
+
+def _literal(text, tolerant):
+    """Turn the fixed parts of an example into a pattern; tolerant parts accept OCR slips."""
+    parts = []
+    for character in text:
+        if character.isdigit():
+            parts.append(r"\d")
+        elif character.isalpha():
+            letter = character.upper()
+            parts.append(_CONFUSABLE.get(letter, re.escape(letter)) if tolerant else re.escape(character))
+        elif character.isspace():
+            parts.append(r"\s?")
+        else:
+            parts.append(rf"\s?{re.escape(character)}?\s?" if tolerant else re.escape(character))
+    return "".join(parts)
+
+
+def suggest_definition(name, code_example, profile_id=None):
+    """Build a profile definition from one registration code as printed in the master list.
+
+    The longest run of digits is the key compared between slip and list (54700 in
+    54700-Z); the characters around it locate the code. On the slip, separators are
+    optional and letters also accept the digit OCR confuses them with (Z or 2)."""
+    code = (code_example or "").strip()
+    runs = list(re.finditer(r"\d+", code))
+    if not runs:
+        raise ProfileError("code example: type a code as it appears in the master list, with its digits.")
+    key = max(runs, key=lambda match: len(match.group()))
+    size = len(key.group())
+    lowest, highest = max(1, size - 1), size + 1
+    before, after = code[:key.start()], code[key.end():]
+    group = rf"(?P<code>\d{{{lowest},{highest}}})"
+    edge_before, edge_after = r"(?<![0-9A-Za-z])", r"(?![0-9A-Za-z])"
+
+    allowed = "0123456789" + "".join(
+        dict.fromkeys(c.upper() for c in before + after if c.isalpha() or c in _SEPARATORS)
+    )
+    # A letter accepted as its look-alike digit needs no extra character.
+    slug = re.sub(r"[^a-z0-9]+", "-", (profile_id or name or "").lower()).strip("-")[:40] or "novo-modelo"
+    return {
+        "id": slug,
+        "name": (name or "").strip() or code,
+        "description": f"Código como {code}; valores no formato 1.234,56.",
+        "reference": {
+            "code": edge_before + _literal(before, False) + group + _literal(after, False) + edge_after,
+            "amount": REFERENCE_AMOUNT,
+            "pairing": "line",
+        },
+        "slip": {
+            "scope": "line",
+            "code": {
+                "pattern": edge_before + _literal(before, True) + group + _literal(after, True) + edge_after,
+                "allowed": allowed,
+                "region": None,
+            },
+            "amount": {"pattern": SLIP_AMOUNT, "allowed": "0123456789.,", "region": None},
+        },
+        "comparison": rf"\d{{{lowest},{highest}}}",
+    }

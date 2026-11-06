@@ -88,6 +88,7 @@ function setup() {
         return respond({ ...rows[1], Review: JSON.parse(options.body).verdict || '' });
       }
       if (url === '/api/v1/metrics') return respond(metrics);
+      if (url === '/api/v1/profiles') return respond([{ id: 'padrao', name: 'Guia padrão', description: '', built_in: true }]);
       throw new Error(`Unexpected request: ${method} ${url}`);
     },
   });
@@ -130,7 +131,7 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
 
   await nodes.get('auditForm').listeners.submit({ preventDefault() {} });
   const upload = requests.find((request) => request.method === 'POST' && request.url.startsWith('/api/v1/audits'));
-  assert.equal(upload.url, '/api/v1/audits?dpi=300');
+  assert.equal(upload.url, '/api/v1/audits?dpi=300&profile=padrao');
   assert.deepEqual([...upload.body.keys()], ['payment_slips', 'reference']);
   assert.equal(streams[0].url, '/api/v1/audits/sample/events');
 

@@ -232,16 +232,37 @@ python auditor.py --payment-slips docs/payment_slips.pdf --reference docs/refere
 
 The CLI runs the same engine without annotated previews and writes a semicolon-separated CSV using Latin-1 encoding. Reference entries without a slip are appended as `MISSING SLIP` rows. Web CSV exports also use semicolons, with UTF-8 text. The CLI does not save audits to SQLite; persistence is handled by the API layer.
 
+## Document profiles
+
+Everything that depends on the layout of a slip or a master list lives in a **document profile**; the rest of the engine (rendering, the eight strategies, voting, matching, categories, review, and metrics) is the same for every layout. A profile defines:
+
+| Part | What it sets |
+|---|---|
+| Master list | The code and amount patterns, and whether codes and amounts are paired **by line** or by their order on each page. |
+| Slip fields | The code and amount patterns, the characters Tesseract may return for each, and optionally a **region** of the page (fractions from 0 to 1). |
+| Comparison | Which canonical codes can be compared. |
+
+Codes and amounts are reduced to canonical forms before they are compared: `0000000000113640` on a slip and `11364-0` in the list are both `113640`; `123766,01` and `123.766,01` are both `123.766,01`. A field with a region is read from its own crop, so other numbers on the slip (fees, totals, dates) never reach the match.
+
+The built-in profile **`padrao`** reproduces the original rules exactly; benchmarks before and after the change give identical results. Other profiles are JSON files in [profiles/](profiles/), such as [exemplo-codigo-z.json](profiles/exemplo-codigo-z.json) for codes like `54700-Z` and amounts above `1.000,00`.
+
+**Creating a profile without writing patterns.** In **Modelos de documento**, the assistant asks for one code copied from the master list (`54700-Z`) and builds the patterns from it: the longest run of digits becomes the compared key, the characters around it locate the code, and on the slip separators become optional and letters also accept the digit OCR confuses them with (`Z` or `2`). A sample master list shows how many entries the profile finds; a sample slip is rendered so the code and amount regions can be drawn with the mouse and tested with the eight strategies before saving. Each audit then picks its profile in the upload form.
+
+The synthetic `codigo-z` samples print a late fee above the amount, so they show why regions matter: read as a whole page, the fee is taken for the amount; with regions, the amount is read correctly.
+
+```bash
+python -m tools.benchmark --samples 10 --profile exemplo-codigo-z --style codigo-z
+```
+
 ## Input format and current limitations
 
-The parser targets the project's reference document layout; it is not a general parser for arbitrary invoices or payment slips.
+The built-in profile targets the project's reference document layout; other layouts need a profile of their own (see [Document profiles](#document-profiles)).
 
 - The reference PDF must contain extractable text. It is not processed with OCR.
-- Reference codes follow a pattern of four or five digits followed by `-0`.
-- Amount extraction expects two or three integer digits and two decimal digits; the reference parser expects a comma decimal separator.
-- Codes and amounts are paired by their order within each reference page. An extra total or a missing value in the reference PDF misaligns that page's pairs. Payment slips themselves are matched by code, so their order does not matter (see [Matching slips to the reference](#matching-slips-to-the-reference)).
+- In the built-in profile, reference codes follow a pattern of four or five digits followed by `-0`; amounts have two or three integer digits (up to 999,99), and codes and amounts are paired by their order within each reference page, so an extra total or a missing value misaligns that page's pairs. Profiles can pair by line instead. Payment slips themselves are matched by code, so their order does not matter (see [Matching slips to the reference](#matching-slips-to-the-reference)).
 - Only printed slips are supported; see [Handwritten payment slips](#handwritten-payment-slips).
-- Scanned code extraction expects a 16-digit numeric sequence that becomes a four-to-six-digit code ending in zero after leading zeros are removed.
+- In the built-in profile, scanned code extraction expects a 16-digit numeric sequence that becomes a four-to-six-digit code ending in zero after leading zeros are removed.
+- Amounts are read in the Brazilian format (comma for decimals). Profiles use regular expressions supplied by the people who configure them; they run on the local server only.
 - Missing or inaccurate OCR coordinates can prevent a field from being highlighted, even when a reading is available.
 
 PDFs are excluded from version control because working documents contain taxpayer data. Supply your own PDFs through the interface, or create a local `docs/` folder for CLI inputs. The clone does not include the reference dataset.
@@ -265,6 +286,11 @@ Interactive API documentation is available at [localhost:8000/docs](http://local
 | `PUT` | `/api/v1/audits/{job_id}/pages/{page}/review` | Record a review: JSON `verdict` of `DOCUMENT`, `OCR`, or `null` to clear it. |
 | `GET` | `/api/v1/audits/{job_id}/report.csv` | Download the available report rows, then missing slips, as CSV. |
 | `GET` | `/api/v1/metrics` | Timing, flagged pages, reviews, and confidence for each resolution. |
+| `GET` | `/api/v1/profiles` | Document profiles; audits take `?profile=<id>` (default `padrao`). |
+| `GET`, `DELETE` | `/api/v1/profiles/{id}` | Read a profile definition, or delete a custom profile. |
+| `POST` | `/api/v1/profiles` | Save a profile definition as `profiles/<id>.json`. |
+| `POST` | `/api/v1/profiles/suggest` | Build a starting definition from one code as printed in the master list. |
+| `POST` | `/api/v1/profiles/reference-preview`, `/api/v1/profiles/slip-preview` | Test a draft profile on a master list or on one slip (all eight strategies). |
 
 Every route except sign-in and registration requires a session. Audits owned by another user return `404`.
 
@@ -343,9 +369,11 @@ for development checks and is not required to run RIBBON.
 TCC/
 ├── core/
 │   ├── engine.py          # PDF extraction, OCR, consensus, matching, and visual evidence
+│   ├── profiles.py        # Document profiles: patterns, regions, and the built-in layout
 │   ├── storage.py         # SQLite audits, users, sessions, reviews, and metrics
 │   ├── samples.py         # Synthetic slips and ground truth for demos and benchmarks
 │   └── migrations.py      # Upgrade legacy history to the English schema
+├── profiles/              # Custom document profiles (JSON), created by the assistant or by hand
 ├── api/
 │   ├── main.py            # REST API, worker lifecycle, SSE, and static files
 │   └── auth.py            # Accounts, password hashing, and session cookies

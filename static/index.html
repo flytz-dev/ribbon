@@ -71,6 +71,10 @@
         <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M6 17v-6M11 17V5M16 17v-9"/></svg>
         Métricas
       </button>
+      <button type="button" class="tab" id="tab-profiles">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><rect x="9" y="11" width="7" height="3"/><rect x="9" y="16" width="4" height="2"/></svg>
+        Modelos de documento
+      </button>
       <p class="side-nav-footer">Servidor local · OCR com Tesseract<br>Atalhos na revisão: R, O, J e K</p>
     </nav>
 
@@ -156,6 +160,7 @@
                 <thead>
                   <tr>
                     <th>Quando</th>
+                    <th>Arquivo · modelo</th>
                     <th>Situação</th>
                     <th class="numeric">DPI</th>
                     <th class="numeric">Páginas</th>
@@ -218,6 +223,12 @@
                   <option value="200">200 — mais rápido</option>
                 </select>
               </label>
+              <label class="field">
+                <span class="label">Modelo de documento</span>
+                <select name="profile" id="profile-select">
+                  <option value="padrao" selected>Guia padrão (matrícula com -0)</option>
+                </select>
+              </label>
             </div>
             <p class="dpi-help" id="dpi-help"></p>
             <button type="submit" id="start-button">Iniciar auditoria</button>
@@ -260,6 +271,7 @@
             </div>
             <div id="resolution-panel">
               <h2>Resolução ativa: <span id="active-resolution">Aguardando...</span></h2>
+              <h2>Modelo: <span id="active-profile">—</span></h2>
             </div>
           </div>
           <p class="statusText" id="statusText">Preparando…</p>
@@ -466,6 +478,141 @@
           <p class="hint">A taxa de erro do OCR conta apenas páginas revisadas; enquanto houver páginas sinalizadas
             sem revisão, ela é um limite inferior. Para medir a precisão sem revisão manual, rode
             <code>python -m tools.benchmark</code> com um arquivo de gabarito.</p>
+        </section>
+      </div>
+
+      <!-- MODELOS DE DOCUMENTO -->
+      <div class="view" id="view-profiles" hidden>
+        <div class="page-header">
+          <div>
+            <span class="breadcrumb">R.I.B.B.O.N. / Modelos de documento</span>
+            <h2 class="page-title">Modelos de documento</h2>
+            <p class="page-subtitle">Ensine o RIBBON a ler outro modelo de guia e de lista mestre, sem mexer no código.</p>
+          </div>
+          <div class="button-set">
+            <button type="button" class="primary-button" id="profile-new-button">
+              Novo modelo
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <section class="card card-flush">
+          <div class="card-header">
+            <div>
+              <h2>Modelos cadastrados</h2>
+              <span class="card-subtitle">Cada auditoria usa um modelo, escolhido na hora do envio</span>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="table">
+              <thead><tr><th>Modelo</th><th>Como ele lê</th><th>Tipo</th><th></th></tr></thead>
+              <tbody id="body-profiles"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card wizard" id="profile-wizard" hidden>
+          <div class="card-header">
+            <div>
+              <h2>Novo modelo</h2>
+              <span class="card-subtitle">Três passos: um exemplo da lista mestre, as regiões na guia e o teste.</span>
+            </div>
+            <button type="button" class="link-button" id="profile-cancel-button">Cancelar</button>
+          </div>
+
+          <ol class="wizard-steps" aria-label="Passos">
+            <li class="wizard-step active" id="profile-step-1"><span>1</span>Lista mestre</li>
+            <li class="wizard-step" id="profile-step-2"><span>2</span>Guia de exemplo</li>
+            <li class="wizard-step" id="profile-step-3"><span>3</span>Salvar</li>
+          </ol>
+
+          <div class="wizard-section">
+            <h3>1. Como os códigos aparecem na lista mestre</h3>
+            <div class="fields">
+              <label class="field">
+                <span class="label">Nome do modelo</span>
+                <input type="text" id="profile-name" placeholder="Guia Prefeitura 2027">
+              </label>
+              <label class="field">
+                <span class="label">Um código, copiado da lista mestre</span>
+                <input type="text" id="profile-code-example" placeholder="54700-Z">
+              </label>
+              <label class="field">
+                <span class="label">PDF da lista mestre (para testar)</span>
+                <input type="file" id="profile-reference-file" accept="application/pdf">
+              </label>
+            </div>
+            <p class="hint">Os valores são lidos no formato brasileiro, com ou sem separador de milhar: 76,82 · 1.234,56 · 123.766,01.</p>
+            <button type="button" class="secondary-button" id="profile-reference-button">Gerar regras e testar na lista</button>
+            <p class="notice" id="profile-reference-notice"></p>
+            <div id="profile-reference-result" hidden>
+              <p class="wizard-result" id="profile-reference-summary"></p>
+              <div class="table-wrapper mini-table">
+                <table class="table compact-table">
+                  <thead><tr><th>Linha</th><th>Código</th><th>Valor</th></tr></thead>
+                  <tbody id="body-profile-entries"></tbody>
+                </table>
+              </div>
+            </div>
+            <details class="resolution-details">
+              <summary>Regras avançadas (expressões regulares)</summary>
+              <div class="fields">
+                <label class="field">
+                  <span class="label">Código na lista mestre</span>
+                  <input type="text" id="profile-reference-pattern" spellcheck="false">
+                </label>
+                <label class="field">
+                  <span class="label">Código na guia (tolerante a erros do OCR)</span>
+                  <input type="text" id="profile-slip-pattern" spellcheck="false">
+                </label>
+                <label class="field">
+                  <span class="label">Caracteres que o OCR pode ler no código</span>
+                  <input type="text" id="profile-slip-allowed" spellcheck="false">
+                </label>
+              </div>
+            </details>
+          </div>
+
+          <div class="wizard-section">
+            <h3>2. Onde ficam o código e o valor na guia</h3>
+            <div class="fields">
+              <label class="field">
+                <span class="label">PDF com uma guia deste modelo</span>
+                <input type="file" id="profile-slip-file" accept="application/pdf">
+              </label>
+            </div>
+            <div class="button-set">
+              <button type="button" class="secondary-button" id="profile-slip-button">Carregar guia e testar leitura</button>
+            </div>
+            <p class="notice" id="profile-slip-notice"></p>
+            <div class="region-editor" id="profile-region-editor" hidden>
+              <div class="region-toolbar" role="group" aria-label="Regiões">
+                <button type="button" class="chip" id="profile-mark-code"><i class="marker blue"></i>Marcar código</button>
+                <button type="button" class="chip" id="profile-mark-amount"><i class="marker green"></i>Marcar valor</button>
+                <button type="button" class="link-button" id="profile-clear-regions">Limpar regiões</button>
+                <span class="hint" id="profile-mark-hint">Escolha um campo e arraste sobre a guia para desenhar a região dele.</span>
+              </div>
+              <div class="region-stage" id="profile-stage">
+                <img id="profile-page-image" alt="Guia de exemplo">
+                <div class="region-boxes" id="profile-boxes"></div>
+              </div>
+              <div class="wizard-result" id="profile-slip-result"></div>
+              <button type="button" class="secondary-button" id="profile-test-button">Testar leitura com as regiões</button>
+            </div>
+          </div>
+
+          <div class="wizard-section">
+            <h3>3. Salvar</h3>
+            <div class="fields">
+              <label class="field">
+                <span class="label">Identificador (gerado a partir do nome)</span>
+                <input type="text" id="profile-id" spellcheck="false">
+              </label>
+            </div>
+            <button type="button" class="primary-button" id="profile-save-button">Salvar modelo</button>
+            <p class="notice" id="profile-notice"></p>
+          </div>
         </section>
       </div>
 
