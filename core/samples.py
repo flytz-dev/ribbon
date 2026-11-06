@@ -6,7 +6,10 @@ Two layouts are available, one per document profile:
 - "padrao": a 16-digit numeric line ending in the registration code (master list:
   11364-0) and amounts up to 999,99;
 - "codigo-z": codes such as 54700-Z, amounts from 1.000,00, and a late fee printed
-  above the amount, which only a region in the profile keeps out of the reading.
+  above the amount, which only a region in the profile keeps out of the reading;
+- "municipal": a municipal collection form with registrations such as MAT-48153 at the
+  top right, and a discount printed before the amount due. No profile reads it yet:
+  it is the layout for practising the setup assistant.
 
 A ground truth file records what is printed on each slip, so OCR accuracy can be measured."""
 
@@ -27,7 +30,7 @@ HANDWRITING_FONTS = ("Inkfree.ttf", "segoesc.ttf", "segoepr.ttf", "comic.ttf")
 REFERENCE_LINES_PER_PAGE = 40
 
 # Synthetic layouts, named after the document profile that reads them.
-STYLES = ("padrao", "codigo-z")
+STYLES = ("padrao", "codigo-z", "municipal")
 
 
 def _font(candidates, size):
@@ -56,12 +59,20 @@ def format_amount(integer, cents):
 
 
 def _random_amount(rng, style):
+    if style == "municipal":
+        return format_amount(rng.randint(100, 99999), rng.randint(0, 99))
     if style == "codigo-z":
         return format_amount(rng.randint(1000, 999999), rng.randint(0, 99))
     return f"{rng.randint(10, 999)},{rng.randint(0, 99):02d}"
 
 
 def _random_entry(rng, used_codes, style="padrao"):
+    if style == "municipal":
+        while True:
+            code = str(rng.randint(10000, 99999))
+            if code not in used_codes:
+                used_codes.add(code)
+                return {"code": code, "amount": _random_amount(rng, style)}
     if style == "codigo-z":
         while True:
             code = f"{rng.randint(100, 999)}00"
@@ -91,6 +102,8 @@ def render_slip(code, amount, rng, handwritten=False, style="padrao"):
     """Render one degraded, scanned-looking slip as a grayscale image."""
     if style == "codigo-z":
         return _render_code_z_slip(code, amount, rng, handwritten)
+    if style == "municipal":
+        return _render_municipal_slip(code, amount, rng, handwritten)
     width, height = (round(side * SCAN_DPI) for side in SLIP_SIZE_INCHES)
     image = Image.new("L", (width, height), 255)
     draw = ImageDraw.Draw(image)
@@ -152,6 +165,44 @@ def _render_code_z_slip(code, amount, rng, handwritten):
     else:
         draw.text((margin, margin + 280), printed_code, font=field, fill=0)
         draw.text((margin, margin + 570), amount, font=field, fill=0)
+
+    return _finish_scan(image, draw, rng, margin)
+
+
+def _render_municipal_slip(code, amount, rng, handwritten):
+    """A municipal form: competence month and registration MAT-48153 on top, a discount
+    printed before the amount due, and the due date. Read as a whole page, the discount
+    comes first; regions over the registration and the amount due fix that."""
+    width, height = (round(side * SCAN_DPI) for side in SLIP_SIZE_INCHES)
+    image = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(image)
+    margin = 110
+    right = width // 2 + 120
+
+    label = _font(PRINTED_FONTS, 34)
+    title = _font(PRINTED_FONTS, 50)
+    field = _font(HANDWRITING_FONTS, 92) if handwritten else _font(PRINTED_FONTS, 60)
+
+    draw.rectangle((margin - 30, margin - 30, width - margin + 30, height - margin + 30), outline=0, width=4)
+    draw.text((margin, margin), "GUIA DE ARRECADAÇÃO MUNICIPAL - AMOSTRA", font=title, fill=0)
+    draw.text((margin, margin + 90), "Documento fictício para testes. Não contém dados de contribuintes.", font=label, fill=70)
+
+    draw.text((margin, margin + 230), "Competência", font=label, fill=60)
+    draw.text((margin, margin + 280), "10/2026", font=field, fill=0)
+    draw.text((right, margin + 230), "Inscrição municipal", font=label, fill=60)
+    draw.text((margin, margin + 520), "Desconto", font=label, fill=60)
+    draw.text((margin, margin + 570), _random_amount(rng, "municipal"), font=field, fill=0)
+    draw.text((right, margin + 520), "Valor a pagar (R$)", font=label, fill=60)
+    draw.text((margin, margin + 700), "Vencimento", font=label, fill=60)
+    draw.text((margin + 260, margin + 690), f"{rng.randint(10, 28)}/11/2026", font=label, fill=0)
+
+    printed_code = f"MAT-{code}"
+    if handwritten:
+        _draw_handwritten(draw, (right, margin + 280), printed_code, field, rng)
+        _draw_handwritten(draw, (right, margin + 570), amount, field, rng)
+    else:
+        draw.text((right, margin + 280), printed_code, font=field, fill=0)
+        draw.text((right, margin + 570), amount, font=field, fill=0)
 
     return _finish_scan(image, draw, rng, margin)
 
@@ -252,11 +303,14 @@ def generate_dataset(directory, slips=10, seed=0, handwritten=False, discrepanci
     images = [render_slip(entry["code"], entry["amount"], rng, handwritten, style) for entry in printed]
     images[0].save(paths["payment_slips"], save_all=True, append_images=images[1:], resolution=SCAN_DPI)
 
-    if style == "codigo-z":
+    if style == "municipal":
+        listed = [f"MAT-{entry['code']}     10/2026     {entry['amount']}" for entry in reference]
+    elif style == "codigo-z":
         listed = [f"{entry['code']}-Z     {entry['amount']}" for entry in reference]
     else:
         listed = [f"{entry['code'][:-1]}-0     {entry['amount']}" for entry in reference]
-    lines = ["Registration     Amount due"] + listed
+    header = "Inscricao        Competencia     Valor a pagar" if style == "municipal" else "Registration     Amount due"
+    lines = [header] + listed
     write_text_pdf(paths["reference"], [
         lines[start:start + REFERENCE_LINES_PER_PAGE]
         for start in range(0, len(lines), REFERENCE_LINES_PER_PAGE)

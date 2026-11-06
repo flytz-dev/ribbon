@@ -216,6 +216,16 @@ def test_suggestion_from_one_code_reads_the_layout():
     assert profile.slip_code.allowed == "0123456789-Z"
 
 
+def test_municipal_samples_are_read_by_a_profile_suggested_from_one_code(tmp_path):
+    """The practice layout: a profile built from MAT-80621 reads its whole master list."""
+    dataset = samples.generate_dataset(tmp_path, slips=10, seed=48153, style="municipal")
+    profile = profiles.build_profile(profiles.suggest_definition("Guia municipal", "MAT-80621"))
+    entries = engine.extract_reference_list(dataset["reference"], profile)
+    truth = samples.load_ground_truth(dataset["ground_truth"])
+    assert len(entries) == 10 and all(entry["amount"] != "N/A" for entry in entries)
+    assert {row["code"] for row in truth.values()} <= {entry["code"] for entry in entries}
+
+
 def test_suggestion_needs_digits():
     with pytest.raises(profiles.ProfileError, match="code example"):
         profiles.suggest_definition("x", "ABC")
