@@ -349,11 +349,20 @@ def preview_reference(
     profile = _build(_definition_form(definition))
     directory = tempfile.mkdtemp(prefix="ribbon_profile_")
     try:
-        entries = engine.extract_reference_list(_save_upload(reference, directory, "reference.pdf"), profile)
+        path = _save_upload(reference, directory, "reference.pdf")
+        # A scanned PDF (such as the slips) has no extractable text: say so instead of "nothing found".
+        try:
+            pages = engine.pypdf.PdfReader(path).pages
+            text_pages = sum(bool((page.extract_text() or "").strip()) for page in pages)
+            page_count = len(pages)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read the PDF.")
+        entries = engine.extract_reference_list(path, profile)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
     complete = [entry for entry in entries if entry["amount"] != "N/A" and entry["code"] != "N/A"]
-    return {"count": len(entries), "complete": len(complete), "entries": entries[:200]}
+    return {"count": len(entries), "complete": len(complete), "entries": entries[:200],
+            "pages": page_count, "text_pages": text_pages}
 
 
 @app.post("/api/v1/profiles/slip-preview", tags=["Profiles"])

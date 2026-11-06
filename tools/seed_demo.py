@@ -132,18 +132,35 @@ def _in_portuguese(scenario):
     return scenario
 
 
+# Portuguese file names, so the master list and the slips are not confused when uploading.
+LIVE_FILE_NAMES = {"reference": "lista-mestre.pdf", "payment_slips": "guias.pdf", "ground_truth": "gabarito.csv"}
+
+
 def write_live_batches():
     """Batches to upload during the presentation, with their scenarios described."""
     batches = [
         # Ten master-list lines each: ten codes and ten amounts to read.
-        ("lote-apresentacao", 10, 2026, "padrao"),
-        ("lote-modelo-z", 10, 2027, "codigo-z"),
+        ("lote-apresentacao", 10, 2026, "padrao", None),
+        ("lote-modelo-z", 10, 2027, "codigo-z", None),
+        # No profile reads this layout yet: it is for creating a new model in the assistant.
+        ("novo-modelo-municipal", 10, 48153, "municipal",
+         "ainda sem modelo: crie-o em Modelos de documento a partir do código MAT-80621"),
     ]
-    lines = ["Lotes para a demonstração ao vivo (dados sintéticos, sem dados de contribuintes).", ""]
-    for name, slips, seed, style in batches:
+    lines = [
+        "Lotes para a demonstração ao vivo (dados sintéticos, sem dados de contribuintes).",
+        "Em cada pasta: lista-mestre.pdf (texto, vai no campo da lista mestre),",
+        "guias.pdf (guias digitalizadas) e gabarito.csv (o que está impresso em cada guia).",
+        "",
+    ]
+    for name, slips, seed, style, note in batches:
         folder = os.path.join(DEMO_DIR, name)
+        shutil.rmtree(folder, ignore_errors=True)
         dataset = samples.generate_dataset(folder, slips=slips, seed=seed, style=style)
-        lines.append(f"{name}/  (modelo: {profiles.get_profile(STYLE_PROFILE[style]).name})")
+        for key, file_name in LIVE_FILE_NAMES.items():
+            os.replace(dataset[key], os.path.join(folder, file_name))
+        model = note or f"modelo: {profiles.get_profile(STYLE_PROFILE[style]).name}"
+        lines.append(f"{name}/  ({model})")
+        lines.append(f"  - lista mestre com {slips} linhas; {dataset['pages']} guias")
         lines.extend(f"  - {_in_portuguese(item)}" for item in dataset["scenario"])
         lines.append("")
     with open(os.path.join(DEMO_DIR, "LEIA-ME.txt"), "w", encoding="utf-8") as file:

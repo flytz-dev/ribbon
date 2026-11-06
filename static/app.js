@@ -53,6 +53,7 @@ const API_MESSAGES = {
   "Unknown document profile.": "Modelo de documento desconhecido.",
   "The profile definition is not valid JSON.": "As regras do modelo estão incompletas.",
   "The built-in profile cannot be deleted.": "O modelo padrão não pode ser excluído.",
+  "Could not read the PDF.": "Não foi possível abrir este PDF.",
   "Page not processed yet.": "Esta página ainda não foi processada.",
   "Page not found.": "Página não encontrada.",
 };
@@ -1216,13 +1217,25 @@ $("profile-reference-button").addEventListener("click", async () => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(errorMessage(body, "Não foi possível ler a lista mestre."));
 
-    $("profile-reference-summary").innerHTML = body.count
-      ? `<strong>${body.count}</strong> lançamentos encontrados · <strong>${body.complete}</strong> com código e valor`
-      : "Nenhum lançamento encontrado. Confira o exemplo de código ou ajuste as regras avançadas.";
+    if (body.pages && !body.text_pages) {
+      // Scanned pages carry no text: this is almost always the slips PDF chosen by mistake.
+      $("profile-reference-result").hidden = true;
+      setStep(1);
+      throw new Error(`"${file.name}" não tem texto selecionável: parece ser um PDF digitalizado, como o das guias. ` +
+        "Aqui vai o PDF da lista mestre, que tem os códigos e valores em texto.");
+    }
+    if (!body.count) {
+      $("profile-reference-result").hidden = true;
+      setStep(1);
+      throw new Error(`Nenhum código no formato "${$("profile-code-example").value.trim()}" foi encontrado em "${file.name}". ` +
+        "Confira se o exemplo foi copiado exatamente como aparece na lista, ou ajuste as regras avançadas.");
+    }
+    $("profile-reference-summary").innerHTML =
+      `<strong>${body.count}</strong> lançamentos encontrados · <strong>${body.complete}</strong> com código e valor`;
     $("body-profile-entries").innerHTML = body.entries.slice(0, 12).map((entry, index) => `
       <tr><td>${index + 1}</td><td>${escapeHtml(entry.code)}</td><td>${escapeHtml(entry.amount)}</td></tr>`).join("");
     $("profile-reference-result").hidden = false;
-    if (body.count) setStep(2);
+    setStep(2);
   } catch (error) {
     notice.textContent = error.message;
   }

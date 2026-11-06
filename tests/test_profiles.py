@@ -251,6 +251,19 @@ def test_assistant_endpoints_suggest_preview_save_and_delete(client, monkeypatch
     assert client.delete("/api/v1/profiles/padrao").status_code == 400
 
 
+def test_scanned_pdf_in_the_master_list_field_is_reported(client, tmp_path):
+    """Choosing the slips PDF by mistake: it has pages but no text, and the API says so."""
+    dataset = samples.generate_dataset(tmp_path, slips=3, seed=4, style="municipal", discrepancies=False)
+    definition = profiles.suggest_definition("Guia municipal", "MAT-80621")
+    with open(dataset["payment_slips"], "rb") as slips:
+        body = client.post(
+            "/api/v1/profiles/reference-preview",
+            files={"reference": ("guias.pdf", slips, "application/pdf")},
+            data={"definition": json.dumps(definition)},
+        ).json()
+    assert body["pages"] == 3 and body["text_pages"] == 0 and body["count"] == 0
+
+
 def test_slip_preview_reads_with_the_draft_profile(client, monkeypatch):
     from PIL import Image
 
