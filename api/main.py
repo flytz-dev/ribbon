@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from api import auth, simulation
+from api import auth
 from core import storage, engine
 
 app = FastAPI(
@@ -37,8 +37,6 @@ app = FastAPI(
 # The front end is served from this same origin, so no CORS policy is configured:
 # a permissive one would let other sites use a signed-in user's session cookie.
 app.include_router(auth.router)
-# TEMPORARY: multi-user demonstration for the thesis presentation (see api/simulation.py).
-app.include_router(simulation.router)
 
 storage.create_schema()
 

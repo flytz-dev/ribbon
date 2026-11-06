@@ -52,7 +52,6 @@ const API_MESSAGES = {
   "No pages processed yet.": "Nenhuma página foi processada ainda.",
   "Page not processed yet.": "Esta página ainda não foi processada.",
   "Page not found.": "Página não encontrada.",
-  "A simulation is already running.": "Já existe uma simulação em andamento.",
 };
 
 function errorMessage(body, fallback) {
@@ -102,10 +101,18 @@ function showLogin() {
 
 function showApp(username) {
   $("user-name").textContent = username;
+  $("user-initial").textContent = String(username || "?").charAt(0);
+  $("dash-greeting").textContent = `Olá, ${username}`;
+  $("dash-date").textContent = longDate(new Date());
   $("login-card").hidden = true;
   $("app-content").hidden = false;
   $("user-box").hidden = false;
-  loadHistory();
+  showView("dashboard");
+}
+
+function longDate(date) {
+  const text = date.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 async function submitCredentials(mode) {
@@ -140,7 +147,7 @@ $("logout-button").addEventListener("click", async () => {
    Views
    ========================================================= */
 
-const VIEWS = ["audit", "metrics", "simulation"];
+const VIEWS = ["dashboard", "audit", "metrics"];
 
 function showView(name) {
   for (const view of VIEWS) {
@@ -148,11 +155,16 @@ function showView(name) {
     $(`tab-${view}`).classList.toggle("active", view === name);
   }
   if (name === "metrics") loadMetrics();
+  if (name === "dashboard") {
+    loadHistory();
+    loadMetrics();
+  }
 }
 
 for (const view of VIEWS) {
   $(`tab-${view}`).addEventListener("click", () => showView(view));
 }
+$("dash-start-button").addEventListener("click", () => showView("audit"));
 
 /* =========================================================
    Resolution
@@ -202,6 +214,21 @@ auditForm.addEventListener("submit", async (event) => {
   }
 });
 
+const PANEL_STATES = {
+  live: ["Auditoria em andamento", "Ao vivo", "live"],
+  done: ["Auditoria concluída", "Concluída", "ok"],
+  stopped: ["Auditoria interrompida", "Interrompida", "error"],
+  history: ["Relatório da auditoria", "Histórico", ""],
+};
+
+function setPanelState(state) {
+  const [title, label, className] = PANEL_STATES[state];
+  $("panel-title").textContent = title;
+  const tag = $("live-tag");
+  tag.textContent = label;
+  for (const name of ["live", "ok", "error"]) tag.classList.toggle(name, name === className);
+}
+
 function resetPanel() {
   clearInterval(timerInterval);
   elapsedSeconds = 0;
@@ -218,9 +245,11 @@ function resetPanel() {
   $("evidence").hidden = true;
   $("review-box").hidden = true;
   $("tag-strategy").hidden = true;
+  $("strategy-dots").hidden = true;
   $("caption-viewer").hidden = true;
   $("link-csv").hidden = true;
   renderMissing([]);
+  setFilter("all");
 
   panel.hidden = false;
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -228,6 +257,7 @@ function resetPanel() {
 
 function followAudit(jobId) {
   currentJobId = jobId;
+  setPanelState("live");
   statusText.textContent = "Convertendo o PDF e lendo a lista de consulta…";
   startButton.textContent = "Auditoria em andamento…";
 
@@ -279,6 +309,7 @@ function followAudit(jobId) {
 
 function finishAudit(jobId, hasResults) {
   clearInterval(timerInterval);
+  if (eventSource) setPanelState(hasResults ? "done" : "stopped");
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -310,7 +341,7 @@ function renderMissing(entries) {
 
 const STATUS_LABELS = {
   completed: ["Concluída", "ok"],
-  processing: ["Em andamento", ""],
+  processing: ["Em andamento", "live"],
   abandoned: ["Interrompida", ""],
   error: ["Falhou", "error"],
 };
@@ -346,7 +377,8 @@ async function loadHistory() {
 
   const body = $("body-history");
   body.innerHTML = "";
-  $("history-card").hidden = audits.length === 0;
+  $("history-empty").hidden = audits.length > 0;
+  renderDashboardAudits(audits);
 
   for (const audit of audits) {
     const evaluated = audit.matched + audit.mismatched;
@@ -358,11 +390,11 @@ async function loadHistory() {
     tr.innerHTML = `
       <td>${formatTimestamp(audit.created_at)}</td>
       <td><span class="badge ${className}">${escapeHtml(label)}</span></td>
-      <td>${audit.dpi ?? "—"}</td>
-      <td>${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
-      <td>${audit.matched}</td>
-      <td class="${audit.mismatched ? "discrepancy" : ""}">${audit.mismatched}</td>
-      <td>${rate}</td>
+      <td class="numeric">${audit.dpi ?? "—"}</td>
+      <td class="numeric">${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
+      <td class="numeric">${audit.matched}</td>
+      <td class="numeric ${audit.mismatched ? "discrepancy" : ""}">${audit.mismatched}</td>
+      <td>${rateCell(audit.matched, evaluated, rate)}</td>
       <td>${formatDuration(audit.duration_seconds)}</td>
     `;
     tr.addEventListener("click", () => openAudit(audit));
@@ -386,7 +418,9 @@ async function openAudit(audit) {
     return;
   }
 
+  showView("audit");
   resetPanel();
+  setPanelState("history");
   currentJobId = audit.job_id;
   counters.total = audit.total_pages;
   $("active-resolution").textContent = audit.dpi ? `${audit.dpi} DPI` : "—";
@@ -467,11 +501,12 @@ function addRow(event, mismatch) {
   tr.dataset.page = event.page;
   tr.dataset.mismatch = mismatch ? "1" : "0";
   if (mismatch) tr.classList.add("mismatch");
-  if ($("mismatch-filter").checked && !mismatch) tr.hidden = true;
+  tr.hidden = !FILTERS[activeFilter](event.row);
   tr.innerHTML = rowMarkup(event);
   tr.addEventListener("click", () => showPage(event.page));
   event.element = tr;
   tableBody.appendChild(tr);
+  updateFilterCounts();
 }
 
 // Report statuses from the API, with their badge text and style.
@@ -490,8 +525,8 @@ function badge(status) {
 // Discrepancy categories and suggested operator actions.
 const CATEGORIES = {
   "DUPLICATE": ["Duplicada", "severe", "Outra página já foi pareada com esta matrícula. Verifique se a guia está repetida, ou se o código foi lido como outro deste lote."],
-  "LIKELY MISREAD": ["Provável erro de leitura", "", "O código não está na lista de consulta, mas o valor confere com a guia esperada nesta posição. O OCR provavelmente leu o código errado — confirme na imagem."],
-  "UNREAD": ["Não lido", "", "O OCR não extraiu este dado. Confira a qualidade da digitalização ou tente outro DPI."],
+  "LIKELY MISREAD": ["Provável erro de leitura", "misread", "O código não está na lista de consulta, mas o valor confere com a guia esperada nesta posição. O OCR provavelmente leu o código errado — confirme na imagem."],
+  "UNREAD": ["Não lido", "unread", "O OCR não extraiu este dado. Confira a qualidade da digitalização ou tente outro DPI."],
   "REVIEW": ["Verificar", "", "A leitura difere do lançamento da consulta. Compare o campo destacado com a guia original."],
   // Reports created before slips were matched by code.
   "OTHER REGISTRATION": ["Outro cadastro", "severe", "O código lido pertence a outra guia deste lote — pode ser guia trocada."],
@@ -561,11 +596,14 @@ function showPage(number) {
 
   $("comparison").hidden = false;
   $("cmp-code-expected").textContent = row["Code (Reference PDF)"];
-  $("cmp-code-read").textContent = row["Code (OCR Slips)"];
+  $("cmp-code-read").innerHTML = diffMarkup(row["Code (Reference PDF)"], row["Code (OCR Slips)"]);
   $("cmp-code-badge").outerHTML = badge(row["Code Status"]).replace('class="badge', 'id="cmp-code-badge" class="badge');
   $("cmp-amount-expected").textContent = row["Amount (Reference PDF)"];
-  $("cmp-amount-read").textContent = row["Amount (OCR Slips)"];
+  $("cmp-amount-read").innerHTML = diffMarkup(row["Amount (Reference PDF)"], row["Amount (OCR Slips)"]);
   $("cmp-amount-badge").outerHTML = badge(row["Amount Status"]).replace('class="badge', 'id="cmp-amount-badge" class="badge');
+
+  renderStrategyDots(row);
+  if (event.element && event.element.scrollIntoView) event.element.scrollIntoView({ block: "nearest" });
 
   const evidence = evidenceText(event);
   $("evidence").textContent = evidence;
@@ -634,8 +672,12 @@ async function setReview(verdict) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(errorMessage(body, "Não foi possível salvar a revisão."));
     event.row = body;
-    if (event.element) event.element.innerHTML = rowMarkup(event);
+    if (event.element) {
+      event.element.innerHTML = rowMarkup(event);
+      event.element.hidden = !FILTERS[activeFilter](event.row);
+    }
     showReview(event.row);
+    updateFilterCounts();
   } catch (error) {
     $("review-status").textContent = error.message;
   }
@@ -652,14 +694,292 @@ function updateIndicators() {
   $("ind-matched").textContent = counters.matched;
   $("ind-mismatched").textContent = counters.mismatched;
   $("ind-match-rate").textContent = percent(counters.matched, counters.matched + counters.mismatched);
+
+  const share = counters.total ? Math.min(counters.processed / counters.total, 1) : 0;
+  $("progress-ring-fill").style.strokeDashoffset = (RING_LENGTH * (1 - share)).toFixed(1);
+  $("progress-percent").textContent = counters.total ? `${Math.round(share * 100)}%` : "—";
+  $("progress-count").textContent = counters.total ? `${counters.processed} de ${counters.total}` : "aguardando";
+  $("progress-ring").classList.toggle("done", counters.total > 0 && counters.processed >= counters.total);
 }
 
-$("mismatch-filter").addEventListener("change", (event) => {
-  const onlyMismatches = event.target.checked;
-  document.querySelectorAll("#body-table tr").forEach((tr) => {
-    tr.hidden = onlyMismatches && tr.dataset.mismatch !== "1";
+const RING_LENGTH = 339.3; // circumference of the progress ring (r = 54)
+
+/* =========================================================
+   Report filters, navigation, and keyboard shortcuts
+   ========================================================= */
+
+const isFlagged = (row) => row["Overall Status"] === "ERROR";
+
+// Each filter chip shows the rows its predicate accepts.
+const FILTERS = {
+  all: () => true,
+  mismatch: isFlagged,
+  pending: (row) => isFlagged(row) && !row["Review"],
+  misread: (row) => row["Category"] === "LIKELY MISREAD",
+  review: (row) => row["Category"] === "REVIEW",
+  unread: (row) => row["Category"] === "UNREAD",
+  duplicate: (row) => row["Category"] === "DUPLICATE",
+};
+let activeFilter = "all";
+
+function setFilter(name) {
+  activeFilter = name;
+  for (const key of Object.keys(FILTERS)) $(`filter-${key}`).classList.toggle("active", key === name);
+  for (const event of pages.values()) {
+    if (event.element) event.element.hidden = !FILTERS[name](event.row);
+  }
+  updateFilterCounts();
+}
+
+function updateFilterCounts() {
+  for (const [key, accepts] of Object.entries(FILTERS)) {
+    let count = 0;
+    for (const event of pages.values()) if (accepts(event.row)) count += 1;
+    $(`count-${key}`).textContent = count;
+  }
+}
+
+for (const key of Object.keys(FILTERS)) {
+  $(`filter-${key}`).addEventListener("click", () => setFilter(key));
+}
+
+/** Report pages the current filter shows, in page order. */
+function visiblePages() {
+  return [...pages.values()]
+    .filter((event) => event.element && !event.element.hidden)
+    .map((event) => event.page)
+    .sort((a, b) => a - b);
+}
+
+function moveSelection(step) {
+  const list = visiblePages();
+  if (!list.length) return;
+  const index = list.indexOf(selectedPage);
+  const next = index === -1 ? list[step > 0 ? 0 : list.length - 1] : list[index + step];
+  if (next != null) showPage(next);
+}
+
+function nextPending() {
+  const pending = [...pages.values()]
+    .filter((event) => FILTERS.pending(event.row))
+    .map((event) => event.page)
+    .sort((a, b) => a - b);
+  if (!pending.length) {
+    $("review-status").textContent = "Nenhuma divergência pendente de parecer.";
+    return;
+  }
+  showPage(pending.find((page) => page > selectedPage) ?? pending[0]);
+}
+
+$("next-pending").addEventListener("click", nextPending);
+
+// J/K move through the visible rows; R/O record the verdict of a flagged page.
+function onShortcut(event) {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA|BUTTON|A|SUMMARY)$/.test(event.target?.tagName || "")) return;
+  if (panel.hidden || $("view-audit").hidden) return;
+  const reviewable = !$("review-box").hidden;
+  const actions = {
+    j: () => moveSelection(1),
+    k: () => moveSelection(-1),
+    r: () => reviewable && setReview("DOCUMENT"),
+    o: () => reviewable && setReview("OCR"),
+  };
+  const action = actions[String(event.key).toLowerCase()];
+  if (!action) return;
+  event.preventDefault();
+  action();
+}
+
+if (typeof document.addEventListener === "function") document.addEventListener("keydown", onShortcut);
+
+/** Highlight the characters the OCR read differently from the reference. */
+function diffMarkup(expected, read) {
+  const text = String(read ?? "");
+  const reference = String(expected ?? "");
+  if (!text || text === reference) return escapeHtml(text || "—");
+  if (text.length !== reference.length) return `<span class="diff">${escapeHtml(text)}</span>`;
+  return [...text].map((character, index) => (
+    character === reference[index] ? escapeHtml(character) : `<span class="diff">${escapeHtml(character)}</span>`
+  )).join("");
+}
+
+/** One square per image strategy; filled squares agreed on the code. */
+function renderStrategyDots(row) {
+  const box = $("strategy-dots");
+  const strategies = row["Strategies Run"];
+  if (!strategies) {
+    box.hidden = true;
+    return;
+  }
+  const votes = Math.max(row["Code Votes"] ?? 0, 0);
+  const flagged = isFlagged(row) ? " flagged" : "";
+  if (strategies === 1) {
+    box.innerHTML = `<span class="dots-label">Leitura</span><span class="dot agree${flagged}"></span>` +
+      '<span class="dots-note">1ª leitura já pareada com a consulta; consenso não foi necessário.</span>';
+  } else {
+    const dots = Array.from({ length: strategies }, (_, index) => (
+      `<span class="dot${index < votes ? ` agree${flagged}` : ""}" style="animation-delay: ${index * 40}ms"></span>`
+    )).join("");
+    box.innerHTML = `<span class="dots-label">Consenso</span>${dots}` +
+      `<span class="dots-note">${votes} de ${strategies} estratégias concordaram no código</span>`;
+  }
+  box.hidden = false;
+}
+
+/** Conformance as a small bar plus its percentage. */
+function rateCell(matched, evaluated, label) {
+  if (!evaluated) return label;
+  const share = (matched / evaluated) * 100;
+  return `<div class="rate-cell"><div class="rate-track"><div class="rate-fill${share < 97 ? " low" : ""}"` +
+    ` style="width: ${share.toFixed(1)}%"></div></div><span class="rate-value">${label}</span></div>`;
+}
+
+/* =========================================================
+   Dashboard
+   ========================================================= */
+
+const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+/** "1 página" or "3 páginas": the count followed by the matching form. */
+function plural(count, singular, pluralForm) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+/** Local calendar day of a timestamp, as YYYY-MM-DD. */
+function dayKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date)) return String(value).slice(0, 10);
+  const twoDigits = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
+}
+
+/** A round axis maximum for four gridline steps. */
+function niceMaximum(value) {
+  const step = value / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(step));
+  const nice = [1, 2, 2.5, 5, 10].find((multiple) => multiple * magnitude >= step) * magnitude;
+  return nice * 4;
+}
+
+function renderDashboardAudits(audits) {
+  const now = new Date();
+  const today = dayKey(now);
+  const todays = audits.filter((audit) => dayKey(audit.created_at) === today);
+  const running = todays.filter((audit) => audit.status === "processing").length;
+  const matched = todays.reduce((total, audit) => total + audit.matched, 0);
+  const evaluated = todays.reduce((total, audit) => total + audit.matched + audit.mismatched, 0);
+
+  $("dash-today-audits").textContent = todays.length;
+  $("dash-today-audits-note").textContent = todays.length
+    ? [plural(todays.length - running, "concluída", "concluídas"), running ? `${running} em andamento` : ""]
+      .filter(Boolean).join(" · ")
+    : "Nenhuma auditoria hoje";
+  $("dash-today-rate").textContent = percent(matched, evaluated);
+  $("dash-today-rate-note").textContent = evaluated
+    ? `${matched} de ${plural(evaluated, "página confere", "páginas conferem")}`
+    : "Sem páginas conferidas hoje";
+
+  // Seven calendar days, oldest first, including days without audits.
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - index));
+    const key = dayKey(date);
+    const ofDay = audits.filter((audit) => dayKey(audit.created_at) === key);
+    return {
+      label: index === 6 ? "Hoje" : `${WEEKDAYS[date.getDay()]} ${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}`,
+      pages: ofDay.reduce((total, audit) => total + audit.processed_pages, 0),
+      divergences: ofDay.reduce((total, audit) => total + audit.mismatched, 0),
+      today: index === 6,
+    };
   });
-});
+
+  const totalPages = days.reduce((total, day) => total + day.pages, 0);
+  const totalDivergences = days.reduce((total, day) => total + day.divergences, 0);
+  $("dash-days-subtitle").textContent = totalPages
+    ? `Últimos 7 dias · ${totalPages} páginas · ${percent(totalPages - totalDivergences, totalPages)} conformes`
+    : "Últimos 7 dias";
+
+  if (!totalPages) {
+    $("dash-days").innerHTML = '<p class="empty">Nenhuma página conferida nos últimos 7 dias.</p>';
+    return;
+  }
+
+  const top = niceMaximum(Math.max(...days.map((day) => day.pages)));
+  const topDivergences = Math.max(...days.map((day) => day.divergences), 1);
+  const axis = [4, 3, 2, 1, 0].map((step) => `<span>${Math.round((top * step) / 4)}</span>`).join("");
+  const bars = days.map((day, index) => `
+    <div class="day-column">
+      ${day.pages ? `<span class="day-value">${day.pages}</span>` : ""}
+      <div class="day-bar${day.today ? " today" : ""}" title="${escapeHtml(day.label)}: ${day.pages} páginas, ${day.divergences} divergências"
+        style="height: ${((day.pages / top) * 100).toFixed(1)}%; animation-delay: ${index * 70}ms"></div>
+    </div>`).join("");
+  const divergenceBars = days.map((day, index) => `
+    <div class="day-column">
+      ${day.divergences ? `<span class="day-value divergence">${day.divergences}</span>` : ""}
+      <div class="day-bar divergence" style="height: ${((day.divergences / topDivergences) * 70).toFixed(1)}%; animation-delay: ${index * 70}ms"></div>
+    </div>`).join("");
+  const labels = days.map((day) => `<span>${escapeHtml(day.label)}</span>`).join("");
+  const describe = days.map((day) => `${day.label} ${day.pages}`).join(", ");
+
+  $("dash-days").innerHTML = `
+    <div class="day-chart">
+      <div class="day-axis" aria-hidden="true">${axis}</div>
+      <div class="day-plot">
+        <div class="day-bars" role="img" aria-label="Páginas por dia: ${escapeHtml(describe)}">${bars}</div>
+        <div class="day-divergences" role="img" aria-label="Divergências por dia">${divergenceBars}</div>
+        <div class="day-labels" aria-hidden="true">${labels}</div>
+      </div>
+    </div>`;
+}
+
+function renderDashboardMetrics(metrics) {
+  const sum = (key) => metrics.reduce((total, item) => total + (item[key] || 0), 0);
+  const flagged = sum("flagged");
+  const ocr = sum("ocr_errors");
+  const documentCount = sum("document_discrepancies");
+  const pending = sum("pending_review");
+
+  // Average conversion + OCR time per page, weighted by the pages that were timed.
+  const timed = metrics.filter((item) => pageMilliseconds(item) != null && item.timed_pages);
+  const timedPages = timed.reduce((total, item) => total + item.timed_pages, 0);
+  if (timedPages) {
+    const milliseconds = timed.reduce((total, item) => total + pageMilliseconds(item) * item.timed_pages, 0) / timedPages;
+    const busiest = timed.reduce((best, item) => (item.pages > best.pages ? item : best));
+    $("dash-page-time").textContent = `${decimal(milliseconds / 1000)} s`;
+    $("dash-page-time-note").textContent = `${plural(timedPages, "página medida", "páginas medidas")} · mais usado: ${busiest.dpi} DPI`;
+  } else {
+    $("dash-page-time").textContent = "—";
+    $("dash-page-time-note").textContent = "Medido nas auditorias concluídas";
+  }
+
+  $("dash-pending").textContent = metrics.length ? pending : "—";
+  $("dash-pending-note").textContent = flagged
+    ? `${plural(flagged, "página sinalizada", "páginas sinalizadas")} · ${flagged - pending} com parecer`
+    : "Nenhuma página sinalizada ainda";
+
+  $("dash-verdicts").innerHTML = flagged ? `
+    <span class="big-number">${flagged}</span> <span class="card-subtitle" style="display: inline">${flagged === 1 ? "página sinalizada" : "páginas sinalizadas"}</span>
+    <div class="verdict-bar" role="img" aria-label="${ocr} erros do OCR, ${documentCount} divergências reais, ${pending} sem parecer">
+      <div class="ocr" style="flex: ${ocr} 1 0"></div>
+      <div class="document" style="flex: ${documentCount} 1 0"></div>
+      <div class="pending" style="flex: ${pending} 1 0"></div>
+    </div>
+    <div class="legend-row">
+      <span><i class="swatch ocr"></i>Erro do OCR <strong>${ocr}</strong></span>
+      <span><i class="swatch document"></i>Divergência real <strong>${documentCount}</strong></span>
+      <span><i class="swatch pending"></i>Sem parecer <strong>${pending}</strong></span>
+    </div>
+    <p class="info-note">Taxa de erro do OCR confirmada: ${percent(ocr, sum("pages"))} das páginas${pending ? " (limite inferior enquanto houver páginas sem parecer)" : ""}.</p>`
+    : '<p class="empty">Nenhuma página sinalizada ainda.</p>';
+
+  const longest = Math.max(...timed.map(pageMilliseconds), 1);
+  $("dash-dpi").innerHTML = timed.map((item) => `
+    <div class="bar-row">
+      <span class="bar-label">${item.dpi} DPI</span>
+      <div class="bar-track"><div class="bar-fill time" style="width: ${(pageMilliseconds(item) / longest) * 100}%"></div></div>
+      <span class="bar-value">${seconds(pageMilliseconds(item))}</span>
+    </div>`).join("") || '<p class="empty">Sem medições ainda.</p>';
+}
 
 /* =========================================================
    Metrics by resolution
@@ -718,6 +1038,7 @@ async function loadMetrics() {
     return;
   }
 
+  renderDashboardMetrics(metrics);
   const empty = metrics.length === 0;
   $("metrics-empty").hidden = !empty;
   $("metrics-charts").hidden = empty;
@@ -750,105 +1071,5 @@ async function loadMetrics() {
 }
 
 $("refresh-metrics-button").addEventListener("click", loadMetrics);
-
-/* =========================================================
-   Multi-user simulation — TEMPORARY demo (see api/simulation.py)
-   ========================================================= */
-
-let simulationTimer = null;
-
-const SIMULATION_STATUS = {
-  waiting: ["Aguardando", ""],
-  "signing in": ["Entrando", ""],
-  uploading: ["Enviando", ""],
-  processing: ["Processando", ""],
-  completed: ["Concluído", "ok"],
-  error: ["Falhou", "error"],
-};
-
-function isolationBadge(user) {
-  if (user.isolated == null) return "—";
-  const title = user.isolated
-    ? "Não conseguiu abrir a auditoria de outro usuário (404), como esperado."
-    : "Conseguiu ver dados de outro usuário: falha de isolamento.";
-  return `<span class="badge ${user.isolated ? "ok" : "error"}" title="${title}">${user.isolated ? "Isolado" : "Vazamento"}</span>`;
-}
-
-function renderSimulation(state) {
-  $("simulation-table-wrapper").hidden = false;
-  $("body-simulation").innerHTML = state.users.map((user) => {
-    const [label, className] = SIMULATION_STATUS[user.status] || [user.status, ""];
-    const progress = user.total ? (user.processed / user.total) * 100 : 0;
-    return `
-      <tr>
-        <td>${escapeHtml(user.username)}</td>
-        <td><span class="badge ${className}" title="${escapeHtml(user.error || "")}">${label}</span></td>
-        <td>
-          <div class="mini-track"><div class="mini-fill" style="width: ${progress}%"></div></div>
-          <span class="mini-label">${user.processed}/${user.total ?? "?"}</span>
-        </td>
-        <td>${user.matched}</td>
-        <td>${user.mismatched}</td>
-        <td>${user.login_ms == null ? "—" : `${user.login_ms} ms`}</td>
-        <td>${user.first_page_seconds == null ? "—" : `${decimal(user.first_page_seconds)} s`}</td>
-        <td>${user.seconds == null ? "—" : `${decimal(user.seconds)} s`}</td>
-        <td>${isolationBadge(user)}</td>
-      </tr>`;
-  }).join("");
-
-  $("simulation-summary").hidden = false;
-  $("sim-total-users").textContent = state.users.length;
-  $("sim-total-pages").textContent = state.users.reduce((total, user) => total + user.processed, 0);
-  const summary = state.summary;
-  $("sim-wall-time").textContent = state.wall_seconds == null ? "…" : formatDuration(state.wall_seconds);
-  $("sim-throughput").textContent = summary?.pages_per_minute == null ? "…" : decimal(summary.pages_per_minute);
-  $("sim-isolation").textContent = summary ? (summary.isolation_passed ? "Aprovado" : "Reprovado") : "…";
-  $("sim-isolation-card").className = `indicator ${summary ? (summary.isolation_passed ? "ok" : "error") : ""}`;
-}
-
-async function pollSimulation(simulationId) {
-  try {
-    const response = await api(`/api/v1/simulations/${simulationId}`);
-    if (!response.ok) throw new Error("Situação da simulação indisponível.");
-    const state = await response.json();
-    renderSimulation(state);
-    if (state.status !== "running") {
-      stopSimulationPolling();
-      $("simulation-notice").textContent = state.error ? `Erro na simulação: ${state.error}` : "";
-    }
-  } catch (error) {
-    stopSimulationPolling();
-    $("simulation-notice").textContent = error.message;
-  }
-}
-
-function stopSimulationPolling() {
-  clearInterval(simulationTimer);
-  simulationTimer = null;
-  $("simulation-button").disabled = false;
-  $("simulation-button").textContent = "Rodar simulação";
-}
-
-$("simulationForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  $("simulation-notice").textContent = "";
-  const request = {
-    users: Number($("sim-users").value),
-    pages: Number($("sim-pages").value),
-    dpi: Number($("sim-dpi").value),
-  };
-  $("simulation-button").disabled = true;
-  $("simulation-button").textContent = "Simulação em andamento…";
-  try {
-    const response = await api("/api/v1/simulations", jsonRequest("POST", request));
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível iniciar a simulação."));
-    simulationTimer = setInterval(() => pollSimulation(body.simulation_id), 1000);
-    pollSimulation(body.simulation_id);
-  } catch (error) {
-    $("simulation-notice").textContent = error.message;
-    stopSimulationPolling();
-  }
-});
 
 initSession();

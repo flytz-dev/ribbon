@@ -17,6 +17,8 @@ The current application is a **local, multi-user prototype** built with Python, 
 - Pair each slip with its reference entry by registration code, so missing, extra, or reordered slips do not shift the rest of the report.
 - Compare expected and extracted values, filter discrepancies, and inspect their categories.
 - Mark each discrepancy as a real discrepancy (**Divergência real**) or an OCR misread (**Erro do OCR**).
+- Review from the keyboard: `J`/`K` move between report rows, `R`/`O` record the verdict, and **Próxima pendente** jumps to the next discrepancy without one. Filter chips narrow the report by category or by pending review, and the digits the OCR read differently are highlighted.
+- Start from the **Painel** (dashboard): today's audits and conformance, pages per day for the last week, reviewer verdicts, and processing time per resolution. The interface follows the IBM Carbon Design System and uses IBM Plex when installed, falling back to Segoe UI, so it needs no internet access.
 - Compare 200, 300, and 500 DPI in the **Métricas** (metrics) tab: processing time per page, flagged pages, confirmed OCR errors, and confidence.
 - Reopen previous audit reports stored in SQLite and download CSV results.
 - Run the same verification engine from the command line, and benchmark resolutions against a ground truth.
@@ -136,12 +138,6 @@ The interface opens with a sign-in screen. **Criar conta** (create account) regi
 - Audits created before accounts existed have no owner and remain visible to every user.
 
 Registration is open to anyone who can reach the server, and there are no roles or password resets. This suits a prototype on a trusted network; a shared deployment needs administrator-managed accounts, HTTPS, and rate limiting.
-
-## Multi-user simulation (temporary)
-
-The **Simulação multiusuário** (multi-user simulation) tab exists only for the thesis presentation. It creates 2–8 temporary users who sign in and run audits **at the same time** through the real HTTP API, each with their own synthetic slips. The table shows each user's progress, sign-in time, time to first page, and total time. It then checks data isolation: each user tries to open a neighbor's audit (expecting `404`) and confirms that their history lists only their own audit. Temporary accounts and their audits are deleted when the run ends and never appear in metrics.
-
-To remove it, delete `api/simulation.py`, its router registration in `api/main.py`, the tab and the view marked *TEMPORÁRIO* in `static/index.html`, the *Multi-user simulation* section of `static/app.js`, and `tests/test_simulation.py`.
 
 ## Requirements
 
@@ -269,7 +265,6 @@ Interactive API documentation is available at [localhost:8000/docs](http://local
 | `PUT` | `/api/v1/audits/{job_id}/pages/{page}/review` | Record a review: JSON `verdict` of `DOCUMENT`, `OCR`, or `null` to clear it. |
 | `GET` | `/api/v1/audits/{job_id}/report.csv` | Download the available report rows, then missing slips, as CSV. |
 | `GET` | `/api/v1/metrics` | Timing, flagged pages, reviews, and confidence for each resolution. |
-| `POST`, `GET` | `/api/v1/simulations`, `/api/v1/simulations/{id}` | Temporary multi-user simulation. |
 
 Every route except sign-in and registration requires a session. Audits owned by another user return `404`.
 
@@ -333,7 +328,7 @@ registration-code rules are unchanged by the English translation.
 python -m pytest
 ```
 
-The suite covers comparison rules, reference matching, OCR consensus and confidence, normalization, discrepancy classification, reference parsing, sign-in and data isolation, reviews and metrics, the multi-user simulation, synthetic samples and benchmark scoring, API validation and lifecycle behavior, and SQLite persistence and migrations. Tests use synthetic or mocked inputs and a temporary database; they do not require the private PDFs or an installed OCR toolchain. The test configuration always selects a disposable database, even if `RIBBON_DB` or `PYCONFER_DB` is set.
+The suite covers comparison rules, reference matching, OCR consensus and confidence, normalization, discrepancy classification, reference parsing, sign-in and data isolation, reviews and metrics, synthetic samples and benchmark scoring, API validation and lifecycle behavior, and SQLite persistence and migrations. Tests use synthetic or mocked inputs and a temporary database; they do not require the private PDFs or an installed OCR toolchain. The test configuration always selects a disposable database, even if `RIBBON_DB` or `PYCONFER_DB` is set.
 
 These tests do not establish OCR accuracy on real scans or validate the full browser workflow. Use `python -m tools.benchmark` with a ground truth for accuracy, and a manual browser run for the interface.
 
@@ -353,8 +348,7 @@ TCC/
 │   └── migrations.py      # Upgrade legacy history to the English schema
 ├── api/
 │   ├── main.py            # REST API, worker lifecycle, SSE, and static files
-│   ├── auth.py            # Accounts, password hashing, and session cookies
-│   └── simulation.py      # TEMPORARY multi-user demonstration
+│   └── auth.py            # Accounts, password hashing, and session cookies
 ├── tools/
 │   ├── benchmark.py       # Compare resolutions and measure accuracy
 │   └── check_install.py   # Verify packages, Tesseract, Poppler, and one OCR pass

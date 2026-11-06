@@ -13,7 +13,6 @@ The second phase added, in a first form:
 - Per-page timing, Tesseract confidence, and strategy agreement; parallel page reading.
 - Recorded reviewer verdicts (real discrepancy or OCR misread) and a metrics view by resolution.
 - A benchmark tool that measures accuracy against a ground truth, with synthetic sample generation.
-- A **temporary** multi-user simulation for the thesis presentation, to be replaced by a real load test.
 
 Shared database infrastructure, roles and permissions beyond ownership, administrator-managed accounts, and a ground truth for real batches remain future work.
 
@@ -31,7 +30,7 @@ Own `core/`, `api/`, and the data contract consumed by the other workstreams. Co
 
 - Implement check-digit validation for the payment slip's numeric line.
 - Build a ground truth for a real batch and run `python -m tools.benchmark` at each resolution; choose the default DPI from those results.
-- Replace the temporary simulation (`api/simulation.py`) with a load test run outside the application.
+- Add a load test, run outside the application, for several users auditing at the same time.
 - Compare automated verification with manual checking to evaluate the thesis's overall objective.
 
 When another workstream needs a new field or behavior, coordinate the contract with the engine/API owner before modifying these components.

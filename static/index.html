@@ -7,25 +7,35 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
   <header class="header">
-    <div class="header-content">
-      <div>
-        <h1>R.I.B.B.O.N.</h1>
-        <p class="subtitle"><strong>R</strong>econhecimento <strong>I</strong>nteligente de <strong>B</strong>oletos <strong>B</strong>aseado em <strong>O</strong>CR <strong>N</strong>umérico</p>
-      </div>
-      <div class="header-actions">
-        <div class="user-box" id="user-box" hidden>
-          <span>Conectado como <strong id="user-name"></strong></span>
-          <button type="button" class="header-button" id="logout-button">Sair</button>
-        </div>
-        <a class="link-api" href="/docs" target="_blank" rel="noopener">Documentação da API ↗</a>
+    <div class="brand">
+      <h1 class="brand-name">R.I.B.B.O.N.</h1>
+      <span class="brand-tagline">Conferência automatizada de guias</span>
+    </div>
+    <div class="header-actions">
+      <a class="link-api" href="/docs" target="_blank" rel="noopener" aria-label="Documentação da API (abre em nova aba)">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.01"/></svg>
+        <span>API</span>
+      </a>
+      <div class="user-box" id="user-box" hidden>
+        <span class="avatar" id="user-initial" aria-hidden="true"></span>
+        <strong id="user-name"></strong>
+        <button type="button" class="header-button" id="logout-button">Sair</button>
       </div>
     </div>
   </header>
 
-  <main>
-    <!-- Acesso -->
-    <section class="card login-card" id="login-card" hidden>
+  <!-- Acesso -->
+  <section class="card login-card" id="login-card" hidden>
+    <div class="login-brand">
+      <h2>R.I.B.B.O.N.</h2>
+      <p><strong>R</strong>econhecimento <strong>I</strong>nteligente de <strong>B</strong>oletos
+        <strong>B</strong>aseado em <strong>O</strong>CR <strong>N</strong>umérico</p>
+      <p>Confere códigos e valores de guias digitalizadas contra a lista de consulta, página por página,
+        com a evidência de onde cada campo foi lido.</p>
+    </div>
+    <div class="login-form">
       <h2>Entrar</h2>
       <form id="loginForm">
         <label class="field">
@@ -37,25 +47,159 @@
           <input type="password" id="login-password" autocomplete="current-password" required>
         </label>
         <div class="login-actions">
-          <button type="submit" id="login-button">Entrar</button>
           <button type="button" class="secondary-button" id="register-button">Criar conta</button>
+          <button type="submit" id="login-button">Entrar</button>
         </div>
       </form>
       <p class="notice" id="login-notice"></p>
       <p class="hint">Cada usuário vê apenas as próprias auditorias. O usuário deve ter de 3 a 32 caracteres; a senha, pelo menos 8.</p>
-    </section>
+    </div>
+  </section>
 
-    <div class="app-content" id="app-content" hidden>
-      <nav class="tabs">
-        <button type="button" class="tab active" id="tab-audit">Auditoria</button>
-        <button type="button" class="tab" id="tab-metrics">Métricas</button>
-        <button type="button" class="tab" id="tab-simulation">Simulação multiusuário</button>
-      </nav>
+  <div class="app-content" id="app-content" hidden>
 
-      <div class="view" id="view-audit">
+    <nav class="side-nav" aria-label="Navegação principal">
+      <button type="button" class="tab active" id="tab-dashboard">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        Painel
+      </button>
+      <button type="button" class="tab" id="tab-audit">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M4 12h16"/></svg>
+        Auditoria
+      </button>
+      <button type="button" class="tab" id="tab-metrics">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M6 17v-6M11 17V5M16 17v-9"/></svg>
+        Métricas
+      </button>
+      <p class="side-nav-footer">Servidor local · OCR com Tesseract<br>Atalhos na revisão: R, O, J e K</p>
+    </nav>
+
+    <main class="workspace">
+
+      <!-- PAINEL -->
+      <div class="view" id="view-dashboard">
+        <div class="page-header">
+          <div>
+            <span class="breadcrumb">R.I.B.B.O.N. / Painel</span>
+            <h2 class="page-title" id="dash-greeting">Olá</h2>
+            <p class="page-subtitle" id="dash-date"></p>
+          </div>
+          <div class="button-set">
+            <button type="button" class="primary-button" id="dash-start-button">
+              Nova auditoria
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <section class="kpis" aria-label="Indicadores de hoje">
+          <div class="kpi">
+            <span class="kpi-label">Auditorias hoje</span>
+            <span class="kpi-value" id="dash-today-audits">0</span>
+            <span class="kpi-note" id="dash-today-audits-note">Nenhuma auditoria hoje</span>
+          </div>
+          <div class="kpi">
+            <span class="kpi-label">Taxa de conformidade hoje</span>
+            <span class="kpi-value ok" id="dash-today-rate">—</span>
+            <span class="kpi-note" id="dash-today-rate-note">Sem páginas conferidas hoje</span>
+          </div>
+          <div class="kpi">
+            <span class="kpi-label">Tempo médio por página</span>
+            <span class="kpi-value" id="dash-page-time">—</span>
+            <span class="kpi-note" id="dash-page-time-note">Medido nas auditorias concluídas</span>
+          </div>
+          <div class="kpi">
+            <span class="kpi-label">Divergências sem parecer</span>
+            <span class="kpi-value error" id="dash-pending">—</span>
+            <span class="kpi-note" id="dash-pending-note">Revise no relatório de cada auditoria</span>
+          </div>
+        </section>
+
+        <div class="row">
+          <section class="card grow-2">
+            <div class="card-header">
+              <div>
+                <h2>Páginas conferidas por dia</h2>
+                <span class="card-subtitle" id="dash-days-subtitle">Últimos 7 dias</span>
+              </div>
+              <div class="legend-row">
+                <span><i class="swatch pages"></i>Páginas</span>
+                <span><i class="swatch divergence"></i>Divergências</span>
+                <span><i class="swatch today"></i>Hoje</span>
+              </div>
+            </div>
+            <div id="dash-days"></div>
+          </section>
+
+          <section class="card grow-1">
+            <div class="card-header">
+              <div>
+                <h2>Parecer do revisor</h2>
+                <span class="card-subtitle">Páginas sinalizadas, todas as resoluções</span>
+              </div>
+            </div>
+            <div id="dash-verdicts"><p class="empty">Nenhuma página sinalizada ainda.</p></div>
+          </section>
+        </div>
+
+        <div class="row">
+          <section class="card card-flush grow-3" id="history-card">
+            <div class="card-header">
+              <div>
+                <h2>Auditorias anteriores</h2>
+                <span class="card-subtitle">Clique em uma auditoria para reabrir o relatório dela</span>
+              </div>
+              <button type="button" class="secondary-button" id="refresh-history-button">Atualizar</button>
+            </div>
+            <div class="table-wrapper history-wrapper">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Quando</th>
+                    <th>Situação</th>
+                    <th class="numeric">DPI</th>
+                    <th class="numeric">Páginas</th>
+                    <th class="numeric">Conformes</th>
+                    <th class="numeric">Divergências</th>
+                    <th>Conformidade</th>
+                    <th>Duração</th>
+                  </tr>
+                </thead>
+                <tbody id="body-history"></tbody>
+              </table>
+            </div>
+            <p class="empty" id="history-empty">Nenhuma auditoria ainda. Comece pela aba Auditoria.</p>
+            <p class="hint" style="padding: 0 16px 16px">A imagem com os destaques do OCR existe apenas durante a conferência ao vivo.</p>
+          </section>
+
+          <section class="card grow-1">
+            <div class="card-header">
+              <div>
+                <h2>Tempo por página</h2>
+                <span class="card-subtitle">Conversão + OCR, por resolução</span>
+              </div>
+            </div>
+            <div id="dash-dpi"><p class="empty">Sem medições ainda.</p></div>
+            <p class="info-note">O tempo cresce com o quadrado do DPI. 300 DPI costuma ser o melhor equilíbrio; 500 DPI só ajuda quando a digitalização original tem esse detalhe.</p>
+          </section>
+        </div>
+      </div>
+
+      <!-- AUDITORIA -->
+      <div class="view" id="view-audit" hidden>
+        <div class="page-header">
+          <div>
+            <span class="breadcrumb">R.I.B.B.O.N. / Auditoria</span>
+            <h2 class="page-title">Auditoria de guias</h2>
+            <p class="page-subtitle">Envie as guias digitalizadas e a lista de consulta; o relatório é montado ao vivo, página por página.</p>
+          </div>
+        </div>
+
         <!-- ETAPA 1: envio dos documentos -->
         <section class="card" id="upload-card">
-          <h2>1. Selecione os documentos</h2>
+          <div class="card-header">
+            <h2>1. Selecione os documentos</h2>
+          </div>
           <form id="auditForm">
             <div class="fields">
               <label class="field">
@@ -66,7 +210,7 @@
                 <span class="label">PDF de consulta (lista mestre)</span>
                 <input type="file" name="reference" accept="application/pdf" required>
               </label>
-              <label class="field narrow-field">
+              <label class="field">
                 <span class="label">Resolução (DPI)</span>
                 <select name="dpi" id="dpi-select">
                   <option value="500" selected>500 — mais detalhe, mais lento</option>
@@ -87,16 +231,18 @@
               então a resolução muda apenas duas coisas: <strong>o tempo de leitura de cada página</strong>
               e <strong>o nível de detalhe que o Tesseract enxerga</strong>. As regras de conferência são
               as mesmas em qualquer resolução.</p>
-            <table class="table compact-table">
-              <thead>
-                <tr><th>DPI</th><th>Pixels por página A4</th><th>Trabalho relativo</th><th>Quando usar</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>200</td><td>≈ 3,9 milhões</td><td>1×</td><td>Digitalizações limpas e com bom contraste; conferências rápidas.</td></tr>
-                <tr><td>300</td><td>≈ 8,7 milhões</td><td>≈ 2,3×</td><td>Resolução recomendada pelo Tesseract para texto impresso; costuma ser o melhor equilíbrio.</td></tr>
-                <tr><td>500</td><td>≈ 24 milhões</td><td>≈ 6×</td><td>Dígitos pequenos ou apagados, quando a digitalização original realmente tem esse detalhe.</td></tr>
-              </tbody>
-            </table>
+            <div class="table-wrapper">
+              <table class="table compact-table">
+                <thead>
+                  <tr><th>DPI</th><th>Pixels por página A4</th><th>Trabalho relativo</th><th>Quando usar</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>200</td><td>≈ 3,9 milhões</td><td>1×</td><td>Digitalizações limpas e com bom contraste; conferências rápidas.</td></tr>
+                  <tr><td>300</td><td>≈ 8,7 milhões</td><td>≈ 2,3×</td><td>Resolução recomendada pelo Tesseract para texto impresso; costuma ser o melhor equilíbrio.</td></tr>
+                  <tr><td>500</td><td>≈ 24 milhões</td><td>≈ 6×</td><td>Dígitos pequenos ou apagados, quando a digitalização original realmente tem esse detalhe.</td></tr>
+                </tbody>
+              </table>
+            </div>
             <p>Converter acima da resolução em que o papel foi digitalizado acrescenta pixels, mas não
               informação: uma guia digitalizada a 300 DPI não ganha detalhe a 500 DPI. Os filtros de imagem
               usados no consenso também trabalham em pixels, então se comportam de forma um pouco diferente
@@ -105,71 +251,70 @@
           </details>
         </section>
 
-        <!-- Auditorias anteriores (vindas do histórico em banco) -->
-        <section class="card" id="history-card" hidden>
-          <div class="card-header">
-            <h2>Auditorias anteriores</h2>
-            <button type="button" class="secondary-button" id="refresh-history-button">Atualizar</button>
-          </div>
-          <div class="table-wrapper history-wrapper">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Quando</th>
-                  <th>Situação</th>
-                  <th>DPI</th>
-                  <th>Páginas</th>
-                  <th>Conformes</th>
-                  <th>Divergências</th>
-                  <th>Conformidade</th>
-                  <th>Duração</th>
-                </tr>
-              </thead>
-              <tbody id="body-history"></tbody>
-            </table>
-          </div>
-          <p class="hint">Clique em uma auditoria para reabrir o relatório dela. A imagem com os destaques do OCR existe apenas durante a conferência ao vivo.</p>
-        </section>
-
         <!-- ETAPA 2: acompanhamento -->
         <section class="panel" id="panel" hidden>
-          <div id="resolution-panel">
-            <h2>Resolução ativa: <span id="active-resolution">Aguardando...</span></h2>
+          <div class="panel-header">
+            <div class="panel-heading">
+              <h2 id="panel-title">Auditoria em andamento</h2>
+              <span class="badge live" id="live-tag">Ao vivo</span>
+            </div>
+            <div id="resolution-panel">
+              <h2>Resolução ativa: <span id="active-resolution">Aguardando...</span></h2>
+            </div>
           </div>
+          <p class="statusText" id="statusText">Preparando…</p>
 
-          <div class="indicators">
-            <div class="indicator time">
-              <span class="indicator-value" id="ind-time">00:00</span>
-              <span class="indicator-label">Tempo de leitura</span>
+          <div class="progress-summary">
+            <div class="card ring-card">
+              <div class="ring" id="progress-ring">
+                <svg width="136" height="136" viewBox="0 0 136 136" role="img" aria-label="Progresso da auditoria">
+                  <circle class="ring-track" cx="68" cy="68" r="54"/>
+                  <circle class="ring-fill" id="progress-ring-fill" cx="68" cy="68" r="54" style="stroke-dashoffset: 339.3"/>
+                </svg>
+                <div class="ring-label">
+                  <span class="ring-percent" id="progress-percent">0%</span>
+                  <span class="ring-count" id="progress-count">aguardando</span>
+                </div>
+              </div>
+              <div>
+                <h2>Progresso</h2>
+                <span class="card-subtitle">As páginas chegam ao vivo, em ordem, conforme os workers de OCR terminam.</span>
+              </div>
             </div>
-            <div class="indicator time">
-              <span class="indicator-value" id="ind-page-time">—</span>
-              <span class="indicator-label">Segundos por página</span>
-            </div>
-            <div class="indicator">
-              <span class="indicator-value" id="ind-processed">0</span>
-              <span class="indicator-label">Páginas conferidas</span>
-            </div>
-            <div class="indicator ok">
-              <span class="indicator-value" id="ind-matched">0</span>
-              <span class="indicator-label">Conformes</span>
-            </div>
-            <div class="indicator error">
-              <span class="indicator-value" id="ind-mismatched">0</span>
-              <span class="indicator-label">Divergências</span>
-            </div>
-            <div class="indicator">
-              <span class="indicator-value" id="ind-match-rate">—</span>
-              <span class="indicator-label">Taxa de conformidade</span>
+
+            <div class="indicators" aria-live="polite">
+              <div class="indicator time">
+                <span class="indicator-value" id="ind-time">00:00</span>
+                <span class="indicator-label">Tempo de leitura</span>
+              </div>
+              <div class="indicator time">
+                <span class="indicator-value" id="ind-page-time">—</span>
+                <span class="indicator-label">Segundos por página</span>
+              </div>
+              <div class="indicator">
+                <span class="indicator-value" id="ind-processed">0</span>
+                <span class="indicator-label">Páginas conferidas</span>
+              </div>
+              <div class="indicator ok">
+                <span class="indicator-value" id="ind-matched">0</span>
+                <span class="indicator-label">Conformes</span>
+              </div>
+              <div class="indicator error">
+                <span class="indicator-value" id="ind-mismatched">0</span>
+                <span class="indicator-label">Divergências</span>
+              </div>
+              <div class="indicator">
+                <span class="indicator-value" id="ind-match-rate">—</span>
+                <span class="indicator-label">Taxa de conformidade</span>
+              </div>
             </div>
           </div>
 
           <div class="progress-track"><div class="progress-fill" id="progressBar"></div></div>
-          <p class="statusText" id="statusText">Preparando…</p>
 
           <div class="main-grid">
             <!-- Visualização da página -->
-            <div class="card">
+            <div class="card page-card">
               <div class="card-header">
                 <h2>Página em conferência</h2>
                 <span class="tag" id="tag-strategy" hidden></span>
@@ -177,14 +322,14 @@
 
               <div class="comparison" id="comparison" hidden>
                 <div class="comparison-row">
-                  <span class="key"><i class="marker blue"></i>Código</span>
+                  <span class="key"><i class="marker blue"></i>Código (consulta → OCR)</span>
                   <span class="expected" id="cmp-code-expected">—</span>
                   <span class="arrow">→</span>
                   <span class="read" id="cmp-code-read">—</span>
                   <span class="badge" id="cmp-code-badge">—</span>
                 </div>
                 <div class="comparison-row">
-                  <span class="key"><i class="marker green"></i>Valor</span>
+                  <span class="key"><i class="marker green"></i>Valor (consulta → OCR)</span>
                   <span class="expected" id="cmp-amount-expected">—</span>
                   <span class="arrow">→</span>
                   <span class="read" id="cmp-amount-read">—</span>
@@ -192,13 +337,14 @@
                 </div>
               </div>
 
+              <div class="strategy-dots" id="strategy-dots" hidden></div>
               <p class="evidence" id="evidence" hidden></p>
               <p class="explanation-category" id="explanation-category" hidden></p>
 
               <div class="review-box" id="review-box" hidden>
-                <span class="review-question">Parecer do revisor:</span>
-                <button type="button" class="review-button" id="review-document">Divergência real</button>
-                <button type="button" class="review-button" id="review-ocr">Erro do OCR</button>
+                <span class="review-question">Parecer do revisor</span>
+                <button type="button" class="review-button" id="review-document">Divergência real<kbd>R</kbd></button>
+                <button type="button" class="review-button" id="review-ocr">Erro do OCR<kbd>O</kbd></button>
                 <button type="button" class="link-button" id="review-clear">Limpar</button>
                 <span class="review-status" id="review-status"></span>
               </div>
@@ -211,15 +357,22 @@
             </div>
 
             <!-- Tabela de resultados -->
-            <div class="card">
+            <div class="card card-flush report-card">
               <div class="card-header">
                 <h2>Relatório</h2>
                 <div class="actions">
-                  <label class="filter">
-                    <input type="checkbox" id="mismatch-filter"> Só divergências
-                  </label>
+                  <button type="button" class="secondary-button" id="next-pending">Próxima pendente</button>
                   <a class="secondary-button" id="link-csv" hidden>Baixar CSV</a>
                 </div>
+              </div>
+              <div class="filters" role="group" aria-label="Filtrar páginas">
+                <button type="button" class="chip active" id="filter-all">Todas <span class="chip-count" id="count-all">0</span></button>
+                <button type="button" class="chip" id="filter-mismatch">Divergências <span class="chip-count" id="count-mismatch">0</span></button>
+                <button type="button" class="chip" id="filter-pending">Pendentes <span class="chip-count" id="count-pending">0</span></button>
+                <button type="button" class="chip" id="filter-misread">Provável erro de leitura <span class="chip-count" id="count-misread">0</span></button>
+                <button type="button" class="chip" id="filter-review">Verificar <span class="chip-count" id="count-review">0</span></button>
+                <button type="button" class="chip" id="filter-unread">Não lido <span class="chip-count" id="count-unread">0</span></button>
+                <button type="button" class="chip" id="filter-duplicate">Duplicada <span class="chip-count" id="count-duplicate">0</span></button>
               </div>
               <div class="table-wrapper">
                 <table class="table">
@@ -236,11 +389,15 @@
                   <tbody id="body-table"></tbody>
                 </table>
               </div>
-              <p class="hint">Clique em uma linha para rever a imagem daquela página. Marque cada divergência como divergência real ou erro do OCR para alimentar as métricas.</p>
+              <p class="hint">Clique em uma linha para rever a imagem daquela página. Marque cada divergência como
+                divergência real ou erro do OCR para alimentar as métricas.</p>
+              <p class="hint shortcut-hint" style="padding: 0 16px">Atalhos: <kbd>J</kbd> próxima página, <kbd>K</kbd> anterior,
+                <kbd>R</kbd> divergência real, <kbd>O</kbd> erro do OCR.</p>
 
               <div class="missing-block" id="missing-block" hidden>
                 <h3>Lançamentos da consulta sem guia</h3>
-                <p class="hint">Nenhuma página foi pareada com estes lançamentos. A guia pode estar ausente, ou o código dela pode ter sido lido errado.</p>
+                <p class="hint">Nenhuma página foi pareada com estes lançamentos. A guia pode estar ausente, ou o
+                  código dela pode ter sido lido errado.</p>
                 <ul class="missing-list" id="missing-list"></ul>
               </div>
             </div>
@@ -248,12 +405,20 @@
         </section>
       </div>
 
+      <!-- MÉTRICAS -->
       <div class="view" id="view-metrics" hidden>
-        <section class="card" id="metrics-card">
-          <div class="card-header">
-            <h2>Métricas por resolução</h2>
+        <div class="page-header">
+          <div>
+            <span class="breadcrumb">R.I.B.B.O.N. / Métricas</span>
+            <h2 class="page-title">Métricas por resolução</h2>
+            <p class="page-subtitle">Compare 200, 300 e 500 DPI com os seus próprios documentos.</p>
+          </div>
+          <div class="button-set">
             <button type="button" class="secondary-button" id="refresh-metrics-button">Atualizar</button>
           </div>
+        </div>
+
+        <section class="card" id="metrics-card">
           <p class="hint metrics-intro">Cada auditoria registra quanto tempo cada página levou, quantas páginas
             precisaram do consenso de oito estratégias e qual foi a confiança do Tesseract. O parecer do revisor
             separa as páginas sinalizadas em <strong>divergências reais</strong> (o documento difere da consulta)
@@ -297,89 +462,15 @@
               <tbody id="body-metrics"></tbody>
             </table>
           </div>
+
           <p class="hint">A taxa de erro do OCR conta apenas páginas revisadas; enquanto houver páginas sinalizadas
             sem revisão, ela é um limite inferior. Para medir a precisão sem revisão manual, rode
             <code>python -m tools.benchmark</code> com um arquivo de gabarito.</p>
         </section>
       </div>
 
-      <!-- TEMPORÁRIO: simulação multiusuário para a apresentação do TCC (ver api/simulation.py). -->
-      <div class="view" id="view-simulation" hidden>
-        <section class="card" id="simulation-card">
-          <div class="card-header">
-            <h2>Simulação multiusuário</h2>
-            <span class="tag warning-tag">Demonstração temporária</span>
-          </div>
-          <p class="hint metrics-intro">Cria usuários temporários que entram no sistema e rodam auditorias ao
-            mesmo tempo pela API real, cada um com as próprias guias sintéticas. Mede como o servidor divide os
-            workers de OCR e verifica se algum usuário consegue abrir a auditoria de outro. As contas temporárias
-            e as auditorias delas são apagadas ao fim da execução.</p>
-          <form id="simulationForm" class="simulation-form">
-            <label class="field">
-              <span class="label">Usuários simultâneos</span>
-              <input type="number" id="sim-users" min="2" max="8" value="4">
-            </label>
-            <label class="field">
-              <span class="label">Guias por usuário</span>
-              <input type="number" id="sim-pages" min="1" max="6" value="3">
-            </label>
-            <label class="field">
-              <span class="label">Resolução</span>
-              <select id="sim-dpi">
-                <option value="200" selected>200 DPI</option>
-                <option value="300">300 DPI</option>
-                <option value="500">500 DPI</option>
-              </select>
-            </label>
-            <button type="submit" id="simulation-button">Rodar simulação</button>
-          </form>
-          <p class="notice" id="simulation-notice"></p>
-
-          <div class="indicators simulation-summary" id="simulation-summary" hidden>
-            <div class="indicator">
-              <span class="indicator-value" id="sim-total-users">0</span>
-              <span class="indicator-label">Usuários simultâneos</span>
-            </div>
-            <div class="indicator">
-              <span class="indicator-value" id="sim-total-pages">0</span>
-              <span class="indicator-label">Páginas lidas</span>
-            </div>
-            <div class="indicator time">
-              <span class="indicator-value" id="sim-wall-time">—</span>
-              <span class="indicator-label">Tempo total</span>
-            </div>
-            <div class="indicator time">
-              <span class="indicator-value" id="sim-throughput">—</span>
-              <span class="indicator-label">Páginas por minuto</span>
-            </div>
-            <div class="indicator" id="sim-isolation-card">
-              <span class="indicator-value" id="sim-isolation">—</span>
-              <span class="indicator-label">Isolamento dos dados</span>
-            </div>
-          </div>
-
-          <div class="table-wrapper" id="simulation-table-wrapper" hidden>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Usuário</th>
-                  <th>Situação</th>
-                  <th>Progresso</th>
-                  <th>Conformes</th>
-                  <th>Divergências</th>
-                  <th>Login</th>
-                  <th>1ª página</th>
-                  <th>Total</th>
-                  <th>Isolamento</th>
-                </tr>
-              </thead>
-              <tbody id="body-simulation"></tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    </div>
-  </main>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>

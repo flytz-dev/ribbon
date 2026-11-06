@@ -349,7 +349,6 @@ def fast_hashing(monkeypatch):
     ("get", "/api/v1/audits"),
     ("get", "/api/v1/metrics"),
     ("get", "/api/v1/auth/me"),
-    ("post", "/api/v1/simulations"),
 ])
 def test_api_requires_sign_in(anonymous, method, path):
     response = getattr(anonymous, method)(path)

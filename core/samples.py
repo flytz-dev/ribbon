@@ -1,4 +1,4 @@
-"""Synthetic payment slips for demonstrations, benchmarks, and the multi-user simulation.
+"""Synthetic payment slips for demonstrations and benchmarks.
 
 The generated documents imitate the fields the engine reads (a 16-digit numeric line
 ending in the registration code, and an amount) without any taxpayer data. A ground
