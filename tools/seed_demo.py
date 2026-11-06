@@ -135,8 +135,9 @@ def _in_portuguese(scenario):
 def write_live_batches():
     """Batches to upload during the presentation, with their scenarios described."""
     batches = [
-        ("lote-apresentacao", 12, 2026, "padrao"),
-        ("lote-modelo-z", 8, 2027, "codigo-z"),
+        # Ten master-list lines each: ten codes and ten amounts to read.
+        ("lote-apresentacao", 10, 2026, "padrao"),
+        ("lote-modelo-z", 10, 2027, "codigo-z"),
     ]
     lines = ["Lotes para a demonstração ao vivo (dados sintéticos, sem dados de contribuintes).", ""]
     for name, slips, seed, style in batches:

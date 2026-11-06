@@ -49,6 +49,9 @@ Relatorio_Final_Python.csv
 pyconfer.db
 pyconfer.db-wal
 pyconfer.db-shm
+pyconfer-demo.db
+pyconfer-demo.db-wal
+pyconfer-demo.db-shm
 # Local database backups may contain confidential audit data
 backups/
 testee/
