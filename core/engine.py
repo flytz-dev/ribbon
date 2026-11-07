@@ -142,21 +142,36 @@ def _union(boxes):
 
 
 def _ocr_lines(data):
-    """Group OCR words into lines, in reading order: [(text, [(word index, start, end)])]."""
-    words = data.get("text", [])
-    keys = [data.get(name) or [0] * len(words) for name in ("block_num", "par_num", "line_num")]
-    lines = {}
-    for k, word in enumerate(words):
+    """Group OCR words into lines, in reading order: [(text, [(word index, start, end)])].
+
+    Words are grouped by where they are on the image, not by Tesseract's block numbers:
+    in sparse mode (psm 11) each piece of 474.780,65 can come back as its own block.
+    Pieces split at a separator are joined without a space, so the amount is whole again."""
+    words = []
+    for k, word in enumerate(data.get("text", [])):
         word = (word or "").strip()
         if word:
-            lines.setdefault((keys[0][k], keys[1][k], keys[2][k]), []).append((k, word))
+            top, height = data["top"][k], max(1, data["height"][k])
+            words.append((k, word, data["left"][k], top + height / 2, height))
+
+    lines = []  # each: [center, height, [(k, word, left)]]
+    for k, word, left, center, height in sorted(words, key=lambda w: w[3]):
+        for line in lines:
+            if abs(line[0] - center) <= max(line[1], height) / 2:
+                line[2].append((k, word, left))
+                break
+        else:
+            lines.append([center, height, [(k, word, left)]])
+
     result = []
-    for members in lines.values():
+    for _center, _height, members in lines:
         text, spans = "", []
-        for k, word in members:
+        for k, word, _left in sorted(members, key=lambda m: m[2]):
+            if text and not (text[-1] in ".," or word[0] in ".,"):
+                text += " "
             spans.append((k, len(text), len(text) + len(word)))
-            text += word + " "
-        result.append((text.rstrip(), spans))
+            text += word
+        result.append((text, spans))
     return result
 
 
@@ -259,18 +274,39 @@ def extract_image_fields(img_param, profile=None):
     for name, field in slip_fields.items():
         if field.region is None:
             continue
-        try:
-            crop, offset = _crop_region(img_param, field.region)
-            data = pytesseract.image_to_data(
-                # Block mode (psm 6): measured on samples, single-line mode (psm 7)
-                # returned nothing for many cropped fields.
-                crop, lang='eng', config=profile.tesseract_config(field.allowed),
-                output_type=pytesseract.Output.DICT,
-            )
-        except Exception:
-            continue
-        _find_fields(data, profile, [name], result, offset)
+        # Each attempt runs only when the previous one found nothing, so regions that already
+        # read well keep their result. Measured on the samples:
+        # 1. the drawn region as one block of text (psm 6): best for a clean field;
+        # 2. the same region as sparse text (psm 11): recovers fields next to labels or titles;
+        # 3. the region with a margin, as sparse text: recovers fields moved out by a crooked scan.
+        attempts = (
+            (field.region, False),
+            (field.region, True),
+            (_widened(field.region, REGION_SEARCH_MARGIN), True),
+        )
+        for region, sparse in attempts:
+            try:
+                crop, offset = _crop_region(img_param, region)
+                data = pytesseract.image_to_data(
+                    crop, lang='eng', config=profile.tesseract_config(field.allowed, sparse=sparse),
+                    output_type=pytesseract.Output.DICT,
+                )
+            except Exception:
+                continue
+            _find_fields(data, profile, [name], result, offset)
+            if result[name] is not None:
+                break
     return result
+
+
+# Second search around a region whose field was not found, as a fraction of the page.
+# Measured on crooked samples: it recovers fields moved up to 5% out of the region.
+REGION_SEARCH_MARGIN = 0.05
+
+
+def _widened(region, margin):
+    left, top, right, bottom = region
+    return (max(0.0, left - margin), max(0.0, top - margin), min(1.0, right + margin), min(1.0, bottom + margin))
 
 
 # ==========================================
@@ -360,6 +396,7 @@ def read_page(img_gray, is_known, profile=None):
 # ==========================================
 
 MATCHED_BY_CODE = "CODE"
+MATCHED_BY_AMOUNT = "AMOUNT"
 MATCHED_BY_POSITION = "POSITION"
 MATCHED_DUPLICATE = "DUPLICATE"
 
@@ -371,7 +408,11 @@ class ReferenceMatcher:
     so a missing, extra, or out-of-order slip no longer shifts every following page.
     When the code is unreadable or absent from the list, the slip falls back to the
     next unused entry after the last pairing: the position where it was expected.
-    Each entry is used once; entries never paired are reported as missing slips."""
+    If that entry's amount differs from the slip's while exactly one unused entry has
+    the slip's amount, the slip is paired with that entry instead, so a slip after a
+    missing one is not compared with the wrong line. Such slips are still flagged,
+    because their code did not match. Each entry is used once; entries never paired
+    are reported as missing slips."""
 
     def __init__(self, entries, profile=None):
         self.entries = entries
@@ -407,7 +448,17 @@ class ReferenceMatcher:
         self.used[index] = True
         self.cursor = index + 1
 
-    def match(self, code):
+    def _by_amount(self, amount, expected):
+        """The single unused entry with this amount, when the expected entry does not have it."""
+        if amount in _EMPTY_AMOUNT_READINGS or amount == "N/A":
+            return None
+        if expected is not None and self.entries[expected]["amount"] == amount:
+            return None
+        same = [index for index in range(len(self.entries))
+                if self._matchable(index) and self.entries[index]["amount"] == amount]
+        return same[0] if len(same) == 1 else None
+
+    def match(self, code, amount=None):
         """Return (entry index or None, how it was matched)."""
         candidates = self._by_suffix.get(self._suffix(code), [])
         unused = [index for index in candidates if not self.used[index]]
@@ -424,6 +475,10 @@ class ReferenceMatcher:
         index = self._next_unused(self.cursor)
         if index is None:
             index = self._next_unused(0)
+        by_amount = self._by_amount(amount, index)
+        if by_amount is not None:
+            self._take(by_amount)
+            return by_amount, MATCHED_BY_AMOUNT
         if index is None:
             return None, MATCHED_BY_POSITION
         self._take(index)
@@ -539,7 +594,7 @@ def classify_discrepancy(result, matched_by):
     if result["code_status"] != "OK":
         if result["code"] in _EMPTY_CODE_READINGS:
             return CATEGORY_UNREAD
-        if matched_by == MATCHED_BY_POSITION and result["amount_status"] == "OK":
+        if matched_by in (MATCHED_BY_POSITION, MATCHED_BY_AMOUNT) and result["amount_status"] == "OK":
             return CATEGORY_LIKELY_MISREAD
         return CATEGORY_REVIEW
 
@@ -652,7 +707,7 @@ def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_im
         number = page["number"]
         reading = page["reading"]
 
-        index, matched_by = matcher.match(reading["code"])
+        index, matched_by = matcher.match(reading["code"], reading["amount"])
         entry = reference_list[index] if index is not None else None
         code_check, amount_check, overall_status = compare_reading(reading, entry, matched_by, profile)
         result = {**reading, "code_status": code_check, "amount_status": amount_check,

@@ -143,7 +143,7 @@ def test_regions_read_each_field_from_its_own_crop(monkeypatch, example):
     fields = engine.extract_image_fields(page, example)
 
     assert len(calls) == 2, "two crops, no whole-page pass"
-    assert all("--psm 6" in config for _size, config in calls)
+    assert all("--psm 6" in config for _size, config in calls), "a region found at once needs no second pass"
     assert fields["code"] == "54700" and fields["amount"] == "123.766,01"
     left, top = int(0.03 * 1000) - engine.REGION_PADDING, int(0.21 * 1000) - engine.REGION_PADDING
     assert fields["code_box"][:2] == (left + 30, top + 10), "boxes map back onto the page"

@@ -590,6 +590,8 @@ function evidenceText(event) {
   }
   if (row["Matched By"] === "POSITION" && row["Overall Status"] !== "END OF LIST") {
     parts.push(`Pareada pela posição com a linha ${row["Reference Line"]} da consulta`);
+  } else if (row["Matched By"] === "AMOUNT") {
+    parts.push(`Código não conferiu; pareada pelo valor com a linha ${row["Reference Line"]} da consulta`);
   } else if (row["Reference Line"] != null && row["Reference Line"] !== event.page) {
     parts.push(`Pareada com a linha ${row["Reference Line"]} da consulta`);
   }

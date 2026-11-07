@@ -162,8 +162,11 @@ class Profile:
 
     # ---------- Tesseract ----------
 
-    def tesseract_config(self, allowed, single_line=False):
-        options = [f"--psm {7 if single_line else 6}", f"-c tessedit_char_whitelist={allowed}"]
+    def tesseract_config(self, allowed, sparse=False):
+        """Options for one OCR pass. Whole pages are read as one block of text (psm 6);
+        regions as sparse text (psm 11), which measured better when a region also holds
+        labels or a crooked line, and single-line mode (psm 7) often returned nothing."""
+        options = [f"--psm {11 if sparse else 6}", f"-c tessedit_char_whitelist={allowed}"]
         if self.numeric_mode and allowed.strip("0123456789.,") == "":
             options.append("-c classify_bln_numeric_mode=1")
         if self.blacklist:
