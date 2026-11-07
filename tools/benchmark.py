@@ -30,7 +30,7 @@ def expected_outcomes(truth, reference_list, profile=None):
     statuses = {}
     for page in sorted(truth):
         reading = truth[page]
-        index, matched_by = matcher.match(reading["code"])
+        index, matched_by = matcher.match(reading["code"], reading["amount"])
         entry = reference_list[index] if index is not None else None
         statuses[page] = engine.compare_reading(reading, entry, matched_by, profile)[2]
     return statuses, {entry["line"] for entry in matcher.missing()}
