@@ -178,6 +178,56 @@ def test_misread_code_falls_back_to_expected_position():
     assert missing == []
 
 
+def _pair_readings(readings, entries=ENTRIES):
+    """Like _pair, with (code, amount) readings."""
+    matcher = engine.ReferenceMatcher(entries)
+    pairs = []
+    for code, amount in readings:
+        index, matched_by = matcher.match(code, amount)
+        pairs.append((index + 1 if index is not None else None, matched_by))
+    return pairs, [entry["line"] for entry in matcher.missing()]
+
+
+AMOUNTS = [
+    {"code": "113640", "amount": "76,82"},
+    {"code": "116110", "amount": "82,30"},
+    {"code": "118870", "amount": "64,15"},
+    {"code": "59750", "amount": "99,10"},
+]
+
+
+def test_unread_code_after_a_missing_slip_pairs_by_its_unique_amount():
+    """Slip 2 is missing and slip 3's code is unreadable: by position it would take line 2."""
+    pairs, missing = _pair_readings([("113640", "76,82"), ("0", "64,15"), ("59750", "99,10")], AMOUNTS)
+    assert pairs[1] == (3, "AMOUNT")
+    assert missing == [2], "the missing slip is the right line"
+
+
+def test_repeated_amounts_keep_the_positional_fallback():
+    """Standard fees repeat in real lists; a shared amount cannot identify the entry."""
+    entries = [dict(entry, amount="76,82") for entry in AMOUNTS]
+    pairs, _missing = _pair_readings([("113640", "76,82"), ("0", "76,82")], entries)
+    assert pairs[1] == (2, "POSITION")
+
+
+def test_expected_entry_with_the_same_amount_stays_positional():
+    pairs, _missing = _pair_readings([("113640", "76,82"), ("716110", "82,30")], AMOUNTS)
+    assert pairs[1] == (2, "POSITION")
+
+
+def test_a_real_amount_discrepancy_is_still_compared_where_expected():
+    """An amount found in no unused entry leaves the slip at its expected position."""
+    pairs, _missing = _pair_readings([("113640", "76,82"), ("0", "55,55")], AMOUNTS)
+    assert pairs[1] == (2, "POSITION")
+
+
+def test_amount_pairing_keeps_the_page_flagged():
+    unread = _result(code="0", code_status="MISMATCH")
+    misread = _result(code="716110", code_status="MISMATCH")
+    assert engine.classify_discrepancy(unread, engine.MATCHED_BY_AMOUNT) == engine.CATEGORY_UNREAD
+    assert engine.classify_discrepancy(misread, engine.MATCHED_BY_AMOUNT) == engine.CATEGORY_LIKELY_MISREAD
+
+
 def test_repeated_registration_is_a_duplicate():
     pairs, missing = _pair(["113640", "113640", "116110"])
     assert pairs[1] == (1, "DUPLICATE")
@@ -310,7 +360,7 @@ def _fake_strategies(monkeypatch, readings):
 
     calls = []
 
-    def fake_read(_img, index):
+    def fake_read(_img, index, _profile=None):
         calls.append(index)
         return readings[index] if index < len(readings) else _fields()
 
@@ -344,7 +394,7 @@ def test_strategy_coordinates_map_back_to_the_original_page(monkeypatch):
 
     zoom = [name for name, _apply in engine.STRATEGIES].index("5. Zoom 2x")
     monkeypatch.setattr(
-        engine, "extract_image_fields", lambda _img: {**_fields("113640", "76,82"), "code_box": (40, 20, 80, 60)}
+        engine, "extract_image_fields", lambda _img, _profile=None: {**_fields("113640", "76,82"), "code_box": (40, 20, 80, 60)}
     )
 
     fields = engine._read_with_strategy(Image.new("L", (100, 100)), zoom)

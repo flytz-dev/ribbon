@@ -16,13 +16,13 @@ from datetime import datetime
 import traceback
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from api import auth, simulation
-from core import storage, engine
+from api import auth
+from core import storage, engine, profiles, reports
 
 app = FastAPI(
     title="RIBBON API",
@@ -37,8 +37,6 @@ app = FastAPI(
 # The front end is served from this same origin, so no CORS policy is configured:
 # a permissive one would let other sites use a signed-in user's session cookie.
 app.include_router(auth.router)
-# TEMPORARY: multi-user demonstration for the thesis presentation (see api/simulation.py).
-app.include_router(simulation.router)
 
 storage.create_schema()
 
@@ -69,6 +67,8 @@ class AuditHistoryEntry(BaseModel):
     mismatched: int
     dpi: int | None = None
     duration_seconds: float | None = None
+    profile: str | None = None
+    payment_slips_file: str | None = None
 
 
 class AuditSummary(BaseModel):
@@ -81,6 +81,8 @@ class AuditSummary(BaseModel):
     created_at: str
     dpi: int | None = None
     duration_seconds: float | None = None
+    profile: str | None = None
+    payment_slips_file: str | None = None
 
 
 class ReviewRequest(BaseModel):
@@ -154,12 +156,13 @@ def _purge_old_audits() -> None:
         AUDITS.pop(job_id, None)
 
 
-def _execute_audit(job_id: str, payment_slips_path: str, reference_path: str, dpi: int, temp_directory: str):
+def _execute_audit(job_id: str, payment_slips_path: str, reference_path: str, dpi: int, temp_directory: str,
+                   profile=None):
     """Run verification in a worker thread and publish per-page events."""
     audit = AUDITS[job_id]
     event_queue = audit["event_queue"]
     try:
-        for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi):
+        for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi, profile=profile):
             if event["type"] == "page":
                 audit["report"].append(event["row"])
                 if event["row"]["Overall Status"] == "OK":
@@ -234,6 +237,7 @@ async def create_audit(
     payment_slips: UploadFile = File(..., description="PDF containing scanned payment slips."),
     reference: UploadFile = File(..., description="Reference PDF containing the master list."),
     dpi: int = Query(500, ge=100, le=600, description="Rendering resolution in dots per inch."),
+    profile: str = Query(profiles.DEFAULT_PROFILE_ID, description="Document profile id (see /api/v1/profiles)."),
     username: str = Depends(auth.current_user),
 ):
     """Upload both PDFs and start a background audit.
@@ -243,6 +247,10 @@ async def create_audit(
     for file in (payment_slips, reference):
         if not (file.filename or "").lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail=f"'{file.filename}' is not a PDF.")
+    try:
+        document_profile = profiles.get_profile(profile)
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Unknown document profile.")
 
     temp_directory = tempfile.mkdtemp(prefix="ribbon_")
     payment_slips_path = f"{temp_directory}/payment_slips.pdf"
@@ -264,6 +272,8 @@ async def create_audit(
         "matched": 0,
         "mismatched": 0,
         "dpi": dpi,
+        "profile": document_profile.id,
+        "payment_slips_file": payment_slips.filename,
         "duration_seconds": None,
         "owner": username,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -273,15 +283,153 @@ async def create_audit(
     _persist(
         storage.register_audit,
         job_id, AUDITS[job_id]["created_at"], dpi, payment_slips.filename, reference.filename, username,
+        document_profile.id,
     )
 
     threading.Thread(
         target=_execute_audit,
-        args=(job_id, payment_slips_path, reference_path, dpi, temp_directory),
+        args=(job_id, payment_slips_path, reference_path, dpi, temp_directory, document_profile),
         daemon=True,
     ).start()
 
     return AuditCreated(job_id=job_id, message="Audit started. Follow the events endpoint.")
+
+
+@app.get("/api/v1/profiles", tags=["Profiles"])
+def list_profiles(username: str = Depends(auth.current_user)):
+    """Document profiles: how the code and amount are found on each model of slip and master list."""
+    return [profile.summary() for profile in profiles.load_profiles().values()]
+
+
+class SuggestionRequest(BaseModel):
+    name: str = ""
+    code_example: str
+
+
+def _build(definition):
+    """Validate a profile definition sent by the setup assistant."""
+    try:
+        return profiles.build_profile(definition)
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _definition_form(raw: str):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="The profile definition is not valid JSON.")
+
+
+def _save_upload(upload: UploadFile, directory: str, name: str) -> str:
+    if not (upload.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail=f"'{upload.filename}' is not a PDF.")
+    path = f"{directory}/{name}"
+    with open(path, "wb") as output:
+        shutil.copyfileobj(upload.file, output)
+    return path
+
+
+@app.post("/api/v1/profiles/suggest", tags=["Profiles"])
+def suggest_profile(body: SuggestionRequest, username: str = Depends(auth.current_user)):
+    """Build a starting profile definition from one code as printed in the master list."""
+    try:
+        return profiles.suggest_definition(body.name, body.code_example)
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/profiles/reference-preview", tags=["Profiles"])
+def preview_reference(
+    reference: UploadFile = File(..., description="A master-list PDF."),
+    definition: str = Form(..., description="Profile definition as JSON."),
+    username: str = Depends(auth.current_user),
+):
+    """Read a master list with a draft profile and return what it finds."""
+    profile = _build(_definition_form(definition))
+    directory = tempfile.mkdtemp(prefix="ribbon_profile_")
+    try:
+        path = _save_upload(reference, directory, "reference.pdf")
+        # A scanned PDF (such as the slips) has no extractable text: say so instead of "nothing found".
+        try:
+            pages = engine.pypdf.PdfReader(path).pages
+            text_pages = sum(bool((page.extract_text() or "").strip()) for page in pages)
+            page_count = len(pages)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read the PDF.")
+        entries = engine.extract_reference_list(path, profile)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    complete = [entry for entry in entries if entry["amount"] != "N/A" and entry["code"] != "N/A"]
+    return {"count": len(entries), "complete": len(complete), "entries": entries[:200],
+            "pages": page_count, "text_pages": text_pages}
+
+
+@app.post("/api/v1/profiles/slip-preview", tags=["Profiles"])
+def preview_slip(
+    payment_slips: UploadFile = File(..., description="A PDF with at least one slip of this model."),
+    definition: str = Form(..., description="Profile definition as JSON."),
+    page: int = Form(1, ge=1),
+    dpi: int = Form(200, ge=100, le=600),
+    username: str = Depends(auth.current_user),
+):
+    """Render one slip page and read it with a draft profile, running all eight strategies."""
+    profile = _build(_definition_form(definition))
+    directory = tempfile.mkdtemp(prefix="ribbon_profile_")
+    try:
+        path = _save_upload(payment_slips, directory, "payment_slips.pdf")
+        try:
+            pages = engine.pdf2image.convert_from_path(
+                path, dpi=dpi, first_page=page, last_page=page, **engine._poppler_kwargs()
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not render the PDF: {e}")
+        if not pages:
+            raise HTTPException(status_code=400, detail="Page not found.")
+        image = pages[0].convert("L")
+        reading = engine.read_page(image, lambda _code, _amount: False, profile)
+        plain = engine.generate_annotated_image(image, {})["image"]
+        annotated = engine.generate_annotated_image(image, reading)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    return {
+        "page_image": plain,
+        "annotated_image": annotated["image"],
+        "code": reading.get("code"),
+        "amount": reading.get("amount"),
+        "code_votes": reading.get("code_votes"),
+        "amount_votes": reading.get("amount_votes"),
+        "strategies_run": reading.get("strategies_run"),
+        "code_confidence": reading.get("code_conf"),
+        "amount_confidence": reading.get("amount_conf"),
+    }
+
+
+@app.get("/api/v1/profiles/{profile_id}", tags=["Profiles"])
+def get_profile_definition(profile_id: str, username: str = Depends(auth.current_user)):
+    try:
+        return profiles.load_definition(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown document profile.")
+
+
+@app.post("/api/v1/profiles", status_code=201, tags=["Profiles"])
+def save_profile(definition: dict, username: str = Depends(auth.current_user)):
+    """Save a profile definition as profiles/<id>.json, replacing one with the same id."""
+    try:
+        return profiles.save_profile(definition).summary()
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/v1/profiles/{profile_id}", status_code=204, tags=["Profiles"])
+def delete_profile(profile_id: str, username: str = Depends(auth.current_user)):
+    try:
+        profiles.delete_profile(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown document profile.")
+    except profiles.ProfileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/v1/audits", response_model=list[AuditHistoryEntry], tags=["Audit"])
@@ -326,6 +474,8 @@ def get_audit(job_id: str, username: str = Depends(auth.current_user)):
             created_at=audit["created_at"],
             dpi=audit.get("dpi"),
             duration_seconds=audit.get("duration_seconds"),
+            profile=audit.get("profile"),
+            payment_slips_file=audit.get("payment_slips_file"),
         )
     return AuditSummary(**_stored_summary(job_id, username))
 
@@ -362,7 +512,7 @@ def review_page(job_id: str, page: int, body: ReviewRequest, username: str = Dep
 
     saved = False
     try:
-        saved = storage.set_review(job_id, page, body.verdict)
+        saved = storage.set_review(job_id, page, body.verdict, username, datetime.now().isoformat(timespec="seconds"))
     except sqlite3.Error as e:
         print(f"[history] failed to save review: {e}")
     if row is None:
@@ -399,6 +549,40 @@ def download_report(job_id: str, username: str = Depends(auth.current_user)):
         iter([buffer.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="Report_{job_id}.csv"'},
+    )
+
+
+def _profile_names() -> dict[str, str]:
+    return {profile_id: profile.name for profile_id, profile in profiles.load_profiles().items()}
+
+
+@app.get("/api/v1/audits/{job_id}/report.html", response_class=HTMLResponse, tags=["Audit"])
+def printable_report(job_id: str, username: str = Depends(auth.current_user)):
+    """The audit as an A4 page with the discrepancies, verdicts and missing slips; the browser prints it as PDF."""
+    _require_audit(job_id, username)
+    summary = _stored_summary(job_id, username)
+    if summary["status"] == "processing":
+        raise HTTPException(status_code=409, detail="Audit still running.")
+    profile_id = summary.get("profile") or profiles.DEFAULT_PROFILE_ID
+    page = reports.render_audit_report(
+        summary,
+        storage.load_page_rows(job_id),
+        storage.load_missing(job_id),
+        _profile_names().get(profile_id, profile_id),
+        datetime.now(),
+    )
+    return HTMLResponse(page)
+
+
+@app.get("/api/v1/export.zip", tags=["Metrics"])
+def export_data(username: str = Depends(auth.current_user)):
+    """The user's audits, pages and missing slips as Portuguese CSV files for Power BI or Excel."""
+    archive = reports.export_zip(storage.export_tables(username), _profile_names())
+    name = f"ribbon-dados-{datetime.now():%Y-%m-%d}.zip"
+    return Response(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 

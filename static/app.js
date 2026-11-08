@@ -50,9 +50,12 @@ const API_MESSAGES = {
   "Sign in to continue.": "Entre para continuar.",
   "Audit not found.": "Auditoria não encontrada.",
   "No pages processed yet.": "Nenhuma página foi processada ainda.",
+  "Unknown document profile.": "Modelo de documento desconhecido.",
+  "The profile definition is not valid JSON.": "As regras do modelo estão incompletas.",
+  "The built-in profile cannot be deleted.": "O modelo padrão não pode ser excluído.",
+  "Could not read the PDF.": "Não foi possível abrir este PDF.",
   "Page not processed yet.": "Esta página ainda não foi processada.",
   "Page not found.": "Página não encontrada.",
-  "A simulation is already running.": "Já existe uma simulação em andamento.",
 };
 
 function errorMessage(body, fallback) {
@@ -102,10 +105,19 @@ function showLogin() {
 
 function showApp(username) {
   $("user-name").textContent = username;
+  $("user-initial").textContent = String(username || "?").charAt(0);
+  $("dash-greeting").textContent = `Olá, ${username}`;
+  $("dash-date").textContent = longDate(new Date());
   $("login-card").hidden = true;
   $("app-content").hidden = false;
   $("user-box").hidden = false;
-  loadHistory();
+  showView("dashboard");
+  loadProfiles();
+}
+
+function longDate(date) {
+  const text = date.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 async function submitCredentials(mode) {
@@ -140,7 +152,7 @@ $("logout-button").addEventListener("click", async () => {
    Views
    ========================================================= */
 
-const VIEWS = ["audit", "metrics", "simulation"];
+const VIEWS = ["dashboard", "audit", "metrics", "profiles"];
 
 function showView(name) {
   for (const view of VIEWS) {
@@ -148,11 +160,17 @@ function showView(name) {
     $(`tab-${view}`).classList.toggle("active", view === name);
   }
   if (name === "metrics") loadMetrics();
+  if (name === "profiles") loadProfiles();
+  if (name === "dashboard") {
+    loadHistory();
+    loadMetrics();
+  }
 }
 
 for (const view of VIEWS) {
   $(`tab-${view}`).addEventListener("click", () => showView(view));
 }
+$("dash-start-button").addEventListener("click", () => showView("audit"));
 
 /* =========================================================
    Resolution
@@ -181,13 +199,15 @@ auditForm.addEventListener("submit", async (event) => {
 
   const data = new FormData(auditForm);
   const dpi = data.get("dpi") || 500;
+  const profile = data.get("profile") || $("profile-select").value || "padrao";
   data.delete("dpi");
+  data.delete("profile");
 
   startButton.disabled = true;
   startButton.textContent = "Enviando documentos…";
 
   try {
-    const response = await api(`/api/v1/audits?dpi=${dpi}`, { method: "POST", body: data });
+    const response = await api(`/api/v1/audits?dpi=${dpi}&profile=${encodeURIComponent(profile)}`, { method: "POST", body: data });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(errorMessage(error, `Não foi possível iniciar (HTTP ${response.status}).`));
@@ -201,6 +221,21 @@ auditForm.addEventListener("submit", async (event) => {
     startButton.textContent = "Iniciar auditoria";
   }
 });
+
+const PANEL_STATES = {
+  live: ["Auditoria em andamento", "Ao vivo", "live"],
+  done: ["Auditoria concluída", "Concluída", "ok"],
+  stopped: ["Auditoria interrompida", "Interrompida", "error"],
+  history: ["Relatório da auditoria", "Histórico", ""],
+};
+
+function setPanelState(state) {
+  const [title, label, className] = PANEL_STATES[state];
+  $("panel-title").textContent = title;
+  const tag = $("live-tag");
+  tag.textContent = label;
+  for (const name of ["live", "ok", "error"]) tag.classList.toggle(name, name === className);
+}
 
 function resetPanel() {
   clearInterval(timerInterval);
@@ -218,9 +253,12 @@ function resetPanel() {
   $("evidence").hidden = true;
   $("review-box").hidden = true;
   $("tag-strategy").hidden = true;
+  $("strategy-dots").hidden = true;
   $("caption-viewer").hidden = true;
   $("link-csv").hidden = true;
+  $("link-report").hidden = true;
   renderMissing([]);
+  setFilter("all");
 
   panel.hidden = false;
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -228,6 +266,7 @@ function resetPanel() {
 
 function followAudit(jobId) {
   currentJobId = jobId;
+  setPanelState("live");
   statusText.textContent = "Convertendo o PDF e lendo a lista de consulta…";
   startButton.textContent = "Auditoria em andamento…";
 
@@ -248,6 +287,7 @@ function followAudit(jobId) {
       counters.total = event.total_pages;
       statusText.textContent = `${event.total_pages} guias encontradas · ${event.reference_count} lançamentos na consulta · ${event.dpi} DPI`;
       $("active-resolution").textContent = `${event.dpi} DPI`;
+      $("active-profile").textContent = profileName(event.profile);
       updateIndicators();
     } else if (event.type === "page") {
       registerPage(event);
@@ -279,6 +319,7 @@ function followAudit(jobId) {
 
 function finishAudit(jobId, hasResults) {
   clearInterval(timerInterval);
+  if (eventSource) setPanelState(hasResults ? "done" : "stopped");
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -295,6 +336,9 @@ function showCsvLink(jobId) {
   const link = $("link-csv");
   link.href = `/api/v1/audits/${jobId}/report.csv`;
   link.hidden = false;
+  const report = $("link-report");
+  report.href = `/api/v1/audits/${jobId}/report.html`;
+  report.hidden = false;
 }
 
 function renderMissing(entries) {
@@ -310,7 +354,7 @@ function renderMissing(entries) {
 
 const STATUS_LABELS = {
   completed: ["Concluída", "ok"],
-  processing: ["Em andamento", ""],
+  processing: ["Em andamento", "live"],
   abandoned: ["Interrompida", ""],
   error: ["Falhou", "error"],
 };
@@ -346,7 +390,8 @@ async function loadHistory() {
 
   const body = $("body-history");
   body.innerHTML = "";
-  $("history-card").hidden = audits.length === 0;
+  $("history-empty").hidden = audits.length > 0;
+  renderDashboardAudits(audits);
 
   for (const audit of audits) {
     const evaluated = audit.matched + audit.mismatched;
@@ -357,12 +402,14 @@ async function loadHistory() {
     tr.className = "row-history";
     tr.innerHTML = `
       <td>${formatTimestamp(audit.created_at)}</td>
+      <td><span class="file-name">${escapeHtml(audit.payment_slips_file || "—")}</span>
+        <span class="profile-name">${escapeHtml(profileName(audit.profile))}</span></td>
       <td><span class="badge ${className}">${escapeHtml(label)}</span></td>
-      <td>${audit.dpi ?? "—"}</td>
-      <td>${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
-      <td>${audit.matched}</td>
-      <td class="${audit.mismatched ? "discrepancy" : ""}">${audit.mismatched}</td>
-      <td>${rate}</td>
+      <td class="numeric">${audit.dpi ?? "—"}</td>
+      <td class="numeric">${audit.processed_pages}${audit.total_pages ? ` / ${audit.total_pages}` : ""}</td>
+      <td class="numeric">${audit.matched}</td>
+      <td class="numeric ${audit.mismatched ? "discrepancy" : ""}">${audit.mismatched}</td>
+      <td>${rateCell(audit.matched, evaluated, rate)}</td>
       <td>${formatDuration(audit.duration_seconds)}</td>
     `;
     tr.addEventListener("click", () => openAudit(audit));
@@ -386,10 +433,13 @@ async function openAudit(audit) {
     return;
   }
 
+  showView("audit");
   resetPanel();
+  setPanelState("history");
   currentJobId = audit.job_id;
   counters.total = audit.total_pages;
   $("active-resolution").textContent = audit.dpi ? `${audit.dpi} DPI` : "—";
+  $("active-profile").textContent = profileName(audit.profile);
 
   for (const row of rows) {
     // Historical rows have no images; previews are generated only during a live audit.
@@ -467,11 +517,12 @@ function addRow(event, mismatch) {
   tr.dataset.page = event.page;
   tr.dataset.mismatch = mismatch ? "1" : "0";
   if (mismatch) tr.classList.add("mismatch");
-  if ($("mismatch-filter").checked && !mismatch) tr.hidden = true;
+  tr.hidden = !FILTERS[activeFilter](event.row);
   tr.innerHTML = rowMarkup(event);
   tr.addEventListener("click", () => showPage(event.page));
   event.element = tr;
   tableBody.appendChild(tr);
+  updateFilterCounts();
 }
 
 // Report statuses from the API, with their badge text and style.
@@ -490,8 +541,8 @@ function badge(status) {
 // Discrepancy categories and suggested operator actions.
 const CATEGORIES = {
   "DUPLICATE": ["Duplicada", "severe", "Outra página já foi pareada com esta matrícula. Verifique se a guia está repetida, ou se o código foi lido como outro deste lote."],
-  "LIKELY MISREAD": ["Provável erro de leitura", "", "O código não está na lista de consulta, mas o valor confere com a guia esperada nesta posição. O OCR provavelmente leu o código errado — confirme na imagem."],
-  "UNREAD": ["Não lido", "", "O OCR não extraiu este dado. Confira a qualidade da digitalização ou tente outro DPI."],
+  "LIKELY MISREAD": ["Provável erro de leitura", "misread", "O código não está na lista de consulta, mas o valor confere com a guia esperada nesta posição. O OCR provavelmente leu o código errado — confirme na imagem."],
+  "UNREAD": ["Não lido", "unread", "O OCR não extraiu este dado. Confira a qualidade da digitalização ou tente outro DPI."],
   "REVIEW": ["Verificar", "", "A leitura difere do lançamento da consulta. Compare o campo destacado com a guia original."],
   // Reports created before slips were matched by code.
   "OTHER REGISTRATION": ["Outro cadastro", "severe", "O código lido pertence a outra guia deste lote — pode ser guia trocada."],
@@ -543,6 +594,8 @@ function evidenceText(event) {
   }
   if (row["Matched By"] === "POSITION" && row["Overall Status"] !== "END OF LIST") {
     parts.push(`Pareada pela posição com a linha ${row["Reference Line"]} da consulta`);
+  } else if (row["Matched By"] === "AMOUNT") {
+    parts.push(`Código não conferiu; pareada pelo valor com a linha ${row["Reference Line"]} da consulta`);
   } else if (row["Reference Line"] != null && row["Reference Line"] !== event.page) {
     parts.push(`Pareada com a linha ${row["Reference Line"]} da consulta`);
   }
@@ -561,11 +614,14 @@ function showPage(number) {
 
   $("comparison").hidden = false;
   $("cmp-code-expected").textContent = row["Code (Reference PDF)"];
-  $("cmp-code-read").textContent = row["Code (OCR Slips)"];
+  $("cmp-code-read").innerHTML = diffMarkup(row["Code (Reference PDF)"], row["Code (OCR Slips)"]);
   $("cmp-code-badge").outerHTML = badge(row["Code Status"]).replace('class="badge', 'id="cmp-code-badge" class="badge');
   $("cmp-amount-expected").textContent = row["Amount (Reference PDF)"];
-  $("cmp-amount-read").textContent = row["Amount (OCR Slips)"];
+  $("cmp-amount-read").innerHTML = diffMarkup(row["Amount (Reference PDF)"], row["Amount (OCR Slips)"]);
   $("cmp-amount-badge").outerHTML = badge(row["Amount Status"]).replace('class="badge', 'id="cmp-amount-badge" class="badge');
+
+  renderStrategyDots(row);
+  if (event.element && event.element.scrollIntoView) event.element.scrollIntoView({ block: "nearest" });
 
   const evidence = evidenceText(event);
   $("evidence").textContent = evidence;
@@ -634,8 +690,12 @@ async function setReview(verdict) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(errorMessage(body, "Não foi possível salvar a revisão."));
     event.row = body;
-    if (event.element) event.element.innerHTML = rowMarkup(event);
+    if (event.element) {
+      event.element.innerHTML = rowMarkup(event);
+      event.element.hidden = !FILTERS[activeFilter](event.row);
+    }
     showReview(event.row);
+    updateFilterCounts();
   } catch (error) {
     $("review-status").textContent = error.message;
   }
@@ -652,14 +712,292 @@ function updateIndicators() {
   $("ind-matched").textContent = counters.matched;
   $("ind-mismatched").textContent = counters.mismatched;
   $("ind-match-rate").textContent = percent(counters.matched, counters.matched + counters.mismatched);
+
+  const share = counters.total ? Math.min(counters.processed / counters.total, 1) : 0;
+  $("progress-ring-fill").style.strokeDashoffset = (RING_LENGTH * (1 - share)).toFixed(1);
+  $("progress-percent").textContent = counters.total ? `${Math.round(share * 100)}%` : "—";
+  $("progress-count").textContent = counters.total ? `${counters.processed} de ${counters.total}` : "aguardando";
+  $("progress-ring").classList.toggle("done", counters.total > 0 && counters.processed >= counters.total);
 }
 
-$("mismatch-filter").addEventListener("change", (event) => {
-  const onlyMismatches = event.target.checked;
-  document.querySelectorAll("#body-table tr").forEach((tr) => {
-    tr.hidden = onlyMismatches && tr.dataset.mismatch !== "1";
+const RING_LENGTH = 339.3; // circumference of the progress ring (r = 54)
+
+/* =========================================================
+   Report filters, navigation, and keyboard shortcuts
+   ========================================================= */
+
+const isFlagged = (row) => row["Overall Status"] === "ERROR";
+
+// Each filter chip shows the rows its predicate accepts.
+const FILTERS = {
+  all: () => true,
+  mismatch: isFlagged,
+  pending: (row) => isFlagged(row) && !row["Review"],
+  misread: (row) => row["Category"] === "LIKELY MISREAD",
+  review: (row) => row["Category"] === "REVIEW",
+  unread: (row) => row["Category"] === "UNREAD",
+  duplicate: (row) => row["Category"] === "DUPLICATE",
+};
+let activeFilter = "all";
+
+function setFilter(name) {
+  activeFilter = name;
+  for (const key of Object.keys(FILTERS)) $(`filter-${key}`).classList.toggle("active", key === name);
+  for (const event of pages.values()) {
+    if (event.element) event.element.hidden = !FILTERS[name](event.row);
+  }
+  updateFilterCounts();
+}
+
+function updateFilterCounts() {
+  for (const [key, accepts] of Object.entries(FILTERS)) {
+    let count = 0;
+    for (const event of pages.values()) if (accepts(event.row)) count += 1;
+    $(`count-${key}`).textContent = count;
+  }
+}
+
+for (const key of Object.keys(FILTERS)) {
+  $(`filter-${key}`).addEventListener("click", () => setFilter(key));
+}
+
+/** Report pages the current filter shows, in page order. */
+function visiblePages() {
+  return [...pages.values()]
+    .filter((event) => event.element && !event.element.hidden)
+    .map((event) => event.page)
+    .sort((a, b) => a - b);
+}
+
+function moveSelection(step) {
+  const list = visiblePages();
+  if (!list.length) return;
+  const index = list.indexOf(selectedPage);
+  const next = index === -1 ? list[step > 0 ? 0 : list.length - 1] : list[index + step];
+  if (next != null) showPage(next);
+}
+
+function nextPending() {
+  const pending = [...pages.values()]
+    .filter((event) => FILTERS.pending(event.row))
+    .map((event) => event.page)
+    .sort((a, b) => a - b);
+  if (!pending.length) {
+    $("review-status").textContent = "Nenhuma divergência pendente de parecer.";
+    return;
+  }
+  showPage(pending.find((page) => page > selectedPage) ?? pending[0]);
+}
+
+$("next-pending").addEventListener("click", nextPending);
+
+// J/K move through the visible rows; R/O record the verdict of a flagged page.
+function onShortcut(event) {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA|BUTTON|A|SUMMARY)$/.test(event.target?.tagName || "")) return;
+  if (panel.hidden || $("view-audit").hidden) return;
+  const reviewable = !$("review-box").hidden;
+  const actions = {
+    j: () => moveSelection(1),
+    k: () => moveSelection(-1),
+    r: () => reviewable && setReview("DOCUMENT"),
+    o: () => reviewable && setReview("OCR"),
+  };
+  const action = actions[String(event.key).toLowerCase()];
+  if (!action) return;
+  event.preventDefault();
+  action();
+}
+
+if (typeof document.addEventListener === "function") document.addEventListener("keydown", onShortcut);
+
+/** Highlight the characters the OCR read differently from the reference. */
+function diffMarkup(expected, read) {
+  const text = String(read ?? "");
+  const reference = String(expected ?? "");
+  if (!text || text === reference) return escapeHtml(text || "—");
+  if (text.length !== reference.length) return `<span class="diff">${escapeHtml(text)}</span>`;
+  return [...text].map((character, index) => (
+    character === reference[index] ? escapeHtml(character) : `<span class="diff">${escapeHtml(character)}</span>`
+  )).join("");
+}
+
+/** One square per image strategy; filled squares agreed on the code. */
+function renderStrategyDots(row) {
+  const box = $("strategy-dots");
+  const strategies = row["Strategies Run"];
+  if (!strategies) {
+    box.hidden = true;
+    return;
+  }
+  const votes = Math.max(row["Code Votes"] ?? 0, 0);
+  const flagged = isFlagged(row) ? " flagged" : "";
+  if (strategies === 1) {
+    box.innerHTML = `<span class="dots-label">Leitura</span><span class="dot agree${flagged}"></span>` +
+      '<span class="dots-note">1ª leitura já pareada com a consulta; consenso não foi necessário.</span>';
+  } else {
+    const dots = Array.from({ length: strategies }, (_, index) => (
+      `<span class="dot${index < votes ? ` agree${flagged}` : ""}" style="animation-delay: ${index * 40}ms"></span>`
+    )).join("");
+    box.innerHTML = `<span class="dots-label">Consenso</span>${dots}` +
+      `<span class="dots-note">${votes} de ${strategies} estratégias concordaram no código</span>`;
+  }
+  box.hidden = false;
+}
+
+/** Conformance as a small bar plus its percentage. */
+function rateCell(matched, evaluated, label) {
+  if (!evaluated) return label;
+  const share = (matched / evaluated) * 100;
+  return `<div class="rate-cell"><div class="rate-track"><div class="rate-fill${share < 97 ? " low" : ""}"` +
+    ` style="width: ${share.toFixed(1)}%"></div></div><span class="rate-value">${label}</span></div>`;
+}
+
+/* =========================================================
+   Dashboard
+   ========================================================= */
+
+const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+/** "1 página" or "3 páginas": the count followed by the matching form. */
+function plural(count, singular, pluralForm) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+/** Local calendar day of a timestamp, as YYYY-MM-DD. */
+function dayKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date)) return String(value).slice(0, 10);
+  const twoDigits = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
+}
+
+/** A round axis maximum for four gridline steps. */
+function niceMaximum(value) {
+  const step = value / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(step));
+  const nice = [1, 2, 2.5, 5, 10].find((multiple) => multiple * magnitude >= step) * magnitude;
+  return nice * 4;
+}
+
+function renderDashboardAudits(audits) {
+  const now = new Date();
+  const today = dayKey(now);
+  const todays = audits.filter((audit) => dayKey(audit.created_at) === today);
+  const running = todays.filter((audit) => audit.status === "processing").length;
+  const matched = todays.reduce((total, audit) => total + audit.matched, 0);
+  const evaluated = todays.reduce((total, audit) => total + audit.matched + audit.mismatched, 0);
+
+  $("dash-today-audits").textContent = todays.length;
+  $("dash-today-audits-note").textContent = todays.length
+    ? [plural(todays.length - running, "concluída", "concluídas"), running ? `${running} em andamento` : ""]
+      .filter(Boolean).join(" · ")
+    : "Nenhuma auditoria hoje";
+  $("dash-today-rate").textContent = percent(matched, evaluated);
+  $("dash-today-rate-note").textContent = evaluated
+    ? `${matched} de ${plural(evaluated, "página confere", "páginas conferem")}`
+    : "Sem páginas conferidas hoje";
+
+  // Seven calendar days, oldest first, including days without audits.
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - index));
+    const key = dayKey(date);
+    const ofDay = audits.filter((audit) => dayKey(audit.created_at) === key);
+    return {
+      label: index === 6 ? "Hoje" : `${WEEKDAYS[date.getDay()]} ${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}`,
+      pages: ofDay.reduce((total, audit) => total + audit.processed_pages, 0),
+      divergences: ofDay.reduce((total, audit) => total + audit.mismatched, 0),
+      today: index === 6,
+    };
   });
-});
+
+  const totalPages = days.reduce((total, day) => total + day.pages, 0);
+  const totalDivergences = days.reduce((total, day) => total + day.divergences, 0);
+  $("dash-days-subtitle").textContent = totalPages
+    ? `Últimos 7 dias · ${totalPages} páginas · ${percent(totalPages - totalDivergences, totalPages)} conformes`
+    : "Últimos 7 dias";
+
+  if (!totalPages) {
+    $("dash-days").innerHTML = '<p class="empty">Nenhuma página conferida nos últimos 7 dias.</p>';
+    return;
+  }
+
+  const top = niceMaximum(Math.max(...days.map((day) => day.pages)));
+  const topDivergences = Math.max(...days.map((day) => day.divergences), 1);
+  const axis = [4, 3, 2, 1, 0].map((step) => `<span>${Math.round((top * step) / 4)}</span>`).join("");
+  const bars = days.map((day, index) => `
+    <div class="day-column">
+      ${day.pages ? `<span class="day-value">${day.pages}</span>` : ""}
+      <div class="day-bar${day.today ? " today" : ""}" title="${escapeHtml(day.label)}: ${day.pages} páginas, ${day.divergences} divergências"
+        style="height: ${((day.pages / top) * 100).toFixed(1)}%; animation-delay: ${index * 70}ms"></div>
+    </div>`).join("");
+  const divergenceBars = days.map((day, index) => `
+    <div class="day-column">
+      ${day.divergences ? `<span class="day-value divergence">${day.divergences}</span>` : ""}
+      <div class="day-bar divergence" style="height: ${((day.divergences / topDivergences) * 70).toFixed(1)}%; animation-delay: ${index * 70}ms"></div>
+    </div>`).join("");
+  const labels = days.map((day) => `<span>${escapeHtml(day.label)}</span>`).join("");
+  const describe = days.map((day) => `${day.label} ${day.pages}`).join(", ");
+
+  $("dash-days").innerHTML = `
+    <div class="day-chart">
+      <div class="day-axis" aria-hidden="true">${axis}</div>
+      <div class="day-plot">
+        <div class="day-bars" role="img" aria-label="Páginas por dia: ${escapeHtml(describe)}">${bars}</div>
+        <div class="day-divergences" role="img" aria-label="Divergências por dia">${divergenceBars}</div>
+        <div class="day-labels" aria-hidden="true">${labels}</div>
+      </div>
+    </div>`;
+}
+
+function renderDashboardMetrics(metrics) {
+  const sum = (key) => metrics.reduce((total, item) => total + (item[key] || 0), 0);
+  const flagged = sum("flagged");
+  const ocr = sum("ocr_errors");
+  const documentCount = sum("document_discrepancies");
+  const pending = sum("pending_review");
+
+  // Average conversion + OCR time per page, weighted by the pages that were timed.
+  const timed = metrics.filter((item) => pageMilliseconds(item) != null && item.timed_pages);
+  const timedPages = timed.reduce((total, item) => total + item.timed_pages, 0);
+  if (timedPages) {
+    const milliseconds = timed.reduce((total, item) => total + pageMilliseconds(item) * item.timed_pages, 0) / timedPages;
+    const busiest = timed.reduce((best, item) => (item.pages > best.pages ? item : best));
+    $("dash-page-time").textContent = `${decimal(milliseconds / 1000)} s`;
+    $("dash-page-time-note").textContent = `${plural(timedPages, "página medida", "páginas medidas")} · mais usado: ${busiest.dpi} DPI`;
+  } else {
+    $("dash-page-time").textContent = "—";
+    $("dash-page-time-note").textContent = "Medido nas auditorias concluídas";
+  }
+
+  $("dash-pending").textContent = metrics.length ? pending : "—";
+  $("dash-pending-note").textContent = flagged
+    ? `${plural(flagged, "página sinalizada", "páginas sinalizadas")} · ${flagged - pending} com parecer`
+    : "Nenhuma página sinalizada ainda";
+
+  $("dash-verdicts").innerHTML = flagged ? `
+    <span class="big-number">${flagged}</span> <span class="card-subtitle" style="display: inline">${flagged === 1 ? "página sinalizada" : "páginas sinalizadas"}</span>
+    <div class="verdict-bar" role="img" aria-label="${ocr} erros do OCR, ${documentCount} divergências reais, ${pending} sem parecer">
+      <div class="ocr" style="flex: ${ocr} 1 0"></div>
+      <div class="document" style="flex: ${documentCount} 1 0"></div>
+      <div class="pending" style="flex: ${pending} 1 0"></div>
+    </div>
+    <div class="legend-row">
+      <span><i class="swatch ocr"></i>Erro do OCR <strong>${ocr}</strong></span>
+      <span><i class="swatch document"></i>Divergência real <strong>${documentCount}</strong></span>
+      <span><i class="swatch pending"></i>Sem parecer <strong>${pending}</strong></span>
+    </div>
+    <p class="info-note">Taxa de erro do OCR confirmada: ${percent(ocr, sum("pages"))} das páginas${pending ? " (limite inferior enquanto houver páginas sem parecer)" : ""}.</p>`
+    : '<p class="empty">Nenhuma página sinalizada ainda.</p>';
+
+  const longest = Math.max(...timed.map(pageMilliseconds), 1);
+  $("dash-dpi").innerHTML = timed.map((item) => `
+    <div class="bar-row">
+      <span class="bar-label">${item.dpi} DPI</span>
+      <div class="bar-track"><div class="bar-fill time" style="width: ${(pageMilliseconds(item) / longest) * 100}%"></div></div>
+      <span class="bar-value">${seconds(pageMilliseconds(item))}</span>
+    </div>`).join("") || '<p class="empty">Sem medições ainda.</p>';
+}
 
 /* =========================================================
    Metrics by resolution
@@ -718,6 +1056,7 @@ async function loadMetrics() {
     return;
   }
 
+  renderDashboardMetrics(metrics);
   const empty = metrics.length === 0;
   $("metrics-empty").hidden = !empty;
   $("metrics-charts").hidden = empty;
@@ -752,102 +1091,280 @@ async function loadMetrics() {
 $("refresh-metrics-button").addEventListener("click", loadMetrics);
 
 /* =========================================================
-   Multi-user simulation — TEMPORARY demo (see api/simulation.py)
+   Document profiles: which layout of slip and master list to read
    ========================================================= */
 
-let simulationTimer = null;
+let profileList = [{ id: "padrao", name: "Guia padrão (matrícula com -0)", description: "", built_in: true }];
 
-const SIMULATION_STATUS = {
-  waiting: ["Aguardando", ""],
-  "signing in": ["Entrando", ""],
-  uploading: ["Enviando", ""],
-  processing: ["Processando", ""],
-  completed: ["Concluído", "ok"],
-  error: ["Falhou", "error"],
-};
-
-function isolationBadge(user) {
-  if (user.isolated == null) return "—";
-  const title = user.isolated
-    ? "Não conseguiu abrir a auditoria de outro usuário (404), como esperado."
-    : "Conseguiu ver dados de outro usuário: falha de isolamento.";
-  return `<span class="badge ${user.isolated ? "ok" : "error"}" title="${title}">${user.isolated ? "Isolado" : "Vazamento"}</span>`;
+function profileName(id) {
+  const profile = profileList.find((item) => item.id === (id || "padrao"));
+  return profile ? profile.name : (id || "Guia padrão");
 }
 
-function renderSimulation(state) {
-  $("simulation-table-wrapper").hidden = false;
-  $("body-simulation").innerHTML = state.users.map((user) => {
-    const [label, className] = SIMULATION_STATUS[user.status] || [user.status, ""];
-    const progress = user.total ? (user.processed / user.total) * 100 : 0;
-    return `
-      <tr>
-        <td>${escapeHtml(user.username)}</td>
-        <td><span class="badge ${className}" title="${escapeHtml(user.error || "")}">${label}</span></td>
-        <td>
-          <div class="mini-track"><div class="mini-fill" style="width: ${progress}%"></div></div>
-          <span class="mini-label">${user.processed}/${user.total ?? "?"}</span>
-        </td>
-        <td>${user.matched}</td>
-        <td>${user.mismatched}</td>
-        <td>${user.login_ms == null ? "—" : `${user.login_ms} ms`}</td>
-        <td>${user.first_page_seconds == null ? "—" : `${decimal(user.first_page_seconds)} s`}</td>
-        <td>${user.seconds == null ? "—" : `${decimal(user.seconds)} s`}</td>
-        <td>${isolationBadge(user)}</td>
-      </tr>`;
-  }).join("");
-
-  $("simulation-summary").hidden = false;
-  $("sim-total-users").textContent = state.users.length;
-  $("sim-total-pages").textContent = state.users.reduce((total, user) => total + user.processed, 0);
-  const summary = state.summary;
-  $("sim-wall-time").textContent = state.wall_seconds == null ? "…" : formatDuration(state.wall_seconds);
-  $("sim-throughput").textContent = summary?.pages_per_minute == null ? "…" : decimal(summary.pages_per_minute);
-  $("sim-isolation").textContent = summary ? (summary.isolation_passed ? "Aprovado" : "Reprovado") : "…";
-  $("sim-isolation-card").className = `indicator ${summary ? (summary.isolation_passed ? "ok" : "error") : ""}`;
-}
-
-async function pollSimulation(simulationId) {
+async function loadProfiles() {
   try {
-    const response = await api(`/api/v1/simulations/${simulationId}`);
-    if (!response.ok) throw new Error("Situação da simulação indisponível.");
-    const state = await response.json();
-    renderSimulation(state);
-    if (state.status !== "running") {
-      stopSimulationPolling();
-      $("simulation-notice").textContent = state.error ? `Erro na simulação: ${state.error}` : "";
-    }
-  } catch (error) {
-    stopSimulationPolling();
-    $("simulation-notice").textContent = error.message;
+    const response = await api("/api/v1/profiles");
+    if (!response.ok) return;
+    profileList = await response.json();
+  } catch {
+    return;
+  }
+  const select = $("profile-select");
+  const current = select.value || "padrao";
+  select.innerHTML = profileList.map((profile) =>
+    `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`
+  ).join("");
+  select.value = profileList.some((profile) => profile.id === current) ? current : "padrao";
+
+  $("body-profiles").innerHTML = profileList.map((profile) => `
+    <tr>
+      <td><strong>${escapeHtml(profile.name)}</strong><br><span class="profile-name">${escapeHtml(profile.id)}</span></td>
+      <td>${escapeHtml(profile.description)}</td>
+      <td><span class="${profile.built_in ? "badge" : "tag"}">${profile.built_in ? "Embutido" : "Personalizado"}</span></td>
+      <td>${profile.built_in ? "" : `<button type="button" class="link-button" data-delete-profile="${escapeHtml(profile.id)}">Excluir</button>`}</td>
+    </tr>`).join("");
+}
+
+$("body-profiles").addEventListener("click", async (event) => {
+  const button = event.target?.closest?.("[data-delete-profile]");
+  if (!button) return;
+  const id = button.dataset.deleteProfile;
+  if (!window.confirm(`Excluir o modelo "${profileName(id)}"? Auditorias antigas continuam no histórico.`)) return;
+  const response = await api(`/api/v1/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (response.ok) loadProfiles();
+});
+
+/* ---------- setup assistant ---------- */
+
+let draft = null;        // profile definition being built
+let slipFile = null;     // the sample slip, kept to test again after drawing regions
+let markMode = null;     // "code" or "amount" while drawing a region
+let drawing = null;
+
+function setStep(step) {
+  for (const number of [1, 2, 3]) {
+    $(`profile-step-${number}`).classList.toggle("active", number === step);
+    $(`profile-step-${number}`).classList.toggle("done", number < step);
   }
 }
 
-function stopSimulationPolling() {
-  clearInterval(simulationTimer);
-  simulationTimer = null;
-  $("simulation-button").disabled = false;
-  $("simulation-button").textContent = "Rodar simulação";
+function resetWizard() {
+  draft = null;
+  slipFile = null;
+  setMarkMode(null);
+  for (const id of ["profile-name", "profile-code-example", "profile-id",
+    "profile-reference-pattern", "profile-slip-pattern", "profile-slip-allowed"]) $(id).value = "";
+  for (const id of ["profile-reference-notice", "profile-slip-notice", "profile-notice"]) $(id).textContent = "";
+  $("profile-reference-result").hidden = true;
+  $("profile-region-editor").hidden = true;
+  $("profile-boxes").innerHTML = "";
+  $("profile-slip-result").innerHTML = "";
+  setStep(1);
 }
 
-$("simulationForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  $("simulation-notice").textContent = "";
-  const request = {
-    users: Number($("sim-users").value),
-    pages: Number($("sim-pages").value),
-    dpi: Number($("sim-dpi").value),
-  };
-  $("simulation-button").disabled = true;
-  $("simulation-button").textContent = "Simulação em andamento…";
+$("profile-new-button").addEventListener("click", () => {
+  resetWizard();
+  $("profile-wizard").hidden = false;
+  $("profile-wizard").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("profile-cancel-button").addEventListener("click", () => { $("profile-wizard").hidden = true; });
+
+/** Copy the advanced fields into the draft, so manual edits are kept. */
+function applyAdvanced() {
+  if (!draft) return;
+  const referencePattern = $("profile-reference-pattern").value.trim();
+  const slipPattern = $("profile-slip-pattern").value.trim();
+  const allowed = $("profile-slip-allowed").value.trim();
+  if (referencePattern) draft.reference.code = referencePattern;
+  if (slipPattern) draft.slip.code.pattern = slipPattern;
+  if (allowed) draft.slip.code.allowed = allowed;
+  const name = $("profile-name").value.trim();
+  if (name) draft.name = name;
+  const id = $("profile-id").value.trim();
+  if (id) draft.id = id;
+}
+
+async function ensureDraft() {
+  if (draft) {
+    applyAdvanced();
+    return draft;
+  }
+  const example = $("profile-code-example").value.trim();
+  if (!example) throw new Error("Digite um código como ele aparece na lista mestre, por exemplo 54700-Z.");
+  const response = await api("/api/v1/profiles/suggest",
+    jsonRequest("POST", { name: $("profile-name").value.trim(), code_example: example }));
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorMessage(body, "Não foi possível gerar as regras."));
+  draft = body;
+  $("profile-reference-pattern").value = draft.reference.code;
+  $("profile-slip-pattern").value = draft.slip.code.pattern;
+  $("profile-slip-allowed").value = draft.slip.code.allowed;
+  $("profile-id").value = draft.id;
+  return draft;
+}
+
+$("profile-code-example").addEventListener("change", () => { draft = null; });
+
+$("profile-reference-button").addEventListener("click", async () => {
+  const notice = $("profile-reference-notice");
+  notice.textContent = "";
   try {
-    const response = await api("/api/v1/simulations", jsonRequest("POST", request));
+    await ensureDraft();
+    const file = $("profile-reference-file").files?.[0];
+    if (!file) {
+      notice.textContent = "Regras geradas. Envie um PDF da lista mestre para conferir se elas encontram os lançamentos.";
+      setStep(2);
+      return;
+    }
+    const form = new FormData();
+    form.append("reference", file);
+    form.append("definition", JSON.stringify(draft));
+    const response = await api("/api/v1/profiles/reference-preview", { method: "POST", body: form });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível iniciar a simulação."));
-    simulationTimer = setInterval(() => pollSimulation(body.simulation_id), 1000);
-    pollSimulation(body.simulation_id);
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível ler a lista mestre."));
+
+    if (body.pages && !body.text_pages) {
+      // Scanned pages carry no text: this is almost always the slips PDF chosen by mistake.
+      $("profile-reference-result").hidden = true;
+      setStep(1);
+      throw new Error(`"${file.name}" não tem texto selecionável: parece ser um PDF digitalizado, como o das guias. ` +
+        "Aqui vai o PDF da lista mestre, que tem os códigos e valores em texto.");
+    }
+    if (!body.count) {
+      $("profile-reference-result").hidden = true;
+      setStep(1);
+      throw new Error(`Nenhum código no formato "${$("profile-code-example").value.trim()}" foi encontrado em "${file.name}". ` +
+        "Confira se o exemplo foi copiado exatamente como aparece na lista, ou ajuste as regras avançadas.");
+    }
+    $("profile-reference-summary").innerHTML =
+      `<strong>${body.count}</strong> lançamentos encontrados · <strong>${body.complete}</strong> com código e valor`;
+    $("body-profile-entries").innerHTML = body.entries.slice(0, 12).map((entry, index) => `
+      <tr><td>${index + 1}</td><td>${escapeHtml(entry.code)}</td><td>${escapeHtml(entry.amount)}</td></tr>`).join("");
+    $("profile-reference-result").hidden = false;
+    setStep(2);
   } catch (error) {
-    $("simulation-notice").textContent = error.message;
-    stopSimulationPolling();
+    notice.textContent = error.message;
+  }
+});
+
+function describeReading(body) {
+  const votes = (count) => (count ? ` · ${count} de ${body.strategies_run} estratégias` : "");
+  return `
+    <div><i class="marker blue"></i> Código lido: <strong>${escapeHtml(body.code && body.code !== "0" ? body.code : "não encontrado")}</strong>${votes(body.code_votes)}</div>
+    <div><i class="marker green"></i> Valor lido: <strong>${escapeHtml(body.amount && body.amount !== "0,00" ? body.amount : "não encontrado")}</strong>${votes(body.amount_votes)}</div>`;
+}
+
+async function testSlip() {
+  const notice = $("profile-slip-notice");
+  notice.textContent = "";
+  try {
+    await ensureDraft();
+    slipFile = $("profile-slip-file").files?.[0] || slipFile;
+    if (!slipFile) throw new Error("Escolha um PDF com pelo menos uma guia deste modelo.");
+    $("profile-slip-result").innerHTML = '<span class="hint">Lendo a guia com as 8 estratégias…</span>';
+    const form = new FormData();
+    form.append("payment_slips", slipFile);
+    form.append("definition", JSON.stringify(draft));
+    const response = await api("/api/v1/profiles/slip-preview", { method: "POST", body: form });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível ler a guia."));
+    $("profile-page-image").src = body.annotated_image;
+    $("profile-region-editor").hidden = false;
+    $("profile-slip-result").innerHTML = describeReading(body);
+    renderRegions();
+    setStep(body.code && body.code !== "0" && body.amount && body.amount !== "0,00" ? 3 : 2);
+  } catch (error) {
+    $("profile-slip-result").innerHTML = "";
+    notice.textContent = error.message;
+  }
+}
+
+$("profile-slip-button").addEventListener("click", testSlip);
+$("profile-test-button").addEventListener("click", testSlip);
+
+/* Regions are drawn on the page image and stored as fractions of the page. */
+
+function setMarkMode(mode) {
+  markMode = mode;
+  $("profile-mark-code").classList.toggle("active", mode === "code");
+  $("profile-mark-amount").classList.toggle("active", mode === "amount");
+  $("profile-stage").classList.toggle("drawing", Boolean(mode));
+}
+
+$("profile-mark-code").addEventListener("click", () => setMarkMode(markMode === "code" ? null : "code"));
+$("profile-mark-amount").addEventListener("click", () => setMarkMode(markMode === "amount" ? null : "amount"));
+$("profile-clear-regions").addEventListener("click", () => {
+  if (!draft) return;
+  draft.slip.code.region = null;
+  draft.slip.amount.region = null;
+  renderRegions();
+});
+
+function regionBox(region, kind, label) {
+  if (!region) return "";
+  const [left, top, right, bottom] = region.map((value) => value * 100);
+  return `<div class="region-box ${kind}" style="left:${left}%;top:${top}%;width:${right - left}%;height:${bottom - top}%">
+    <span>${label}</span></div>`;
+}
+
+function renderRegions(preview) {
+  if (!draft) return;
+  $("profile-boxes").innerHTML =
+    regionBox(draft.slip.code.region, "code", "Código") +
+    regionBox(draft.slip.amount.region, "amount", "Valor") +
+    (preview ? regionBox(preview, `${markMode} preview`, "") : "");
+}
+
+function pointerFraction(event) {
+  const rect = $("profile-stage").getBoundingClientRect();
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+  return [clamp((event.clientX - rect.left) / rect.width), clamp((event.clientY - rect.top) / rect.height)];
+}
+
+function regionFrom(start, end) {
+  const round = (value) => Math.round(value * 1000) / 1000;
+  return [round(Math.min(start[0], end[0])), round(Math.min(start[1], end[1])),
+    round(Math.max(start[0], end[0])), round(Math.max(start[1], end[1]))];
+}
+
+$("profile-stage").addEventListener("pointerdown", (event) => {
+  if (!markMode || !draft) return;
+  event.preventDefault();
+  drawing = { start: pointerFraction(event) };
+  $("profile-stage").setPointerCapture?.(event.pointerId);
+});
+$("profile-stage").addEventListener("pointermove", (event) => {
+  if (!drawing) return;
+  renderRegions(regionFrom(drawing.start, pointerFraction(event)));
+});
+$("profile-stage").addEventListener("pointerup", (event) => {
+  if (!drawing) return;
+  const region = regionFrom(drawing.start, pointerFraction(event));
+  drawing = null;
+  if (region[2] - region[0] > 0.01 && region[3] - region[1] > 0.01) {
+    draft.slip[markMode].region = region;
+    $("profile-mark-hint").textContent = "Região marcada. Teste a leitura ou marque o outro campo.";
+  }
+  setMarkMode(null);
+  renderRegions();
+});
+
+$("profile-save-button").addEventListener("click", async () => {
+  const notice = $("profile-notice");
+  notice.textContent = "";
+  notice.classList.toggle("success", false);
+  try {
+    await ensureDraft();
+    applyAdvanced();
+    const response = await api("/api/v1/profiles", jsonRequest("POST", draft));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(body, "Não foi possível salvar o modelo."));
+    notice.textContent = `Modelo "${body.name}" salvo. Ele já aparece na escolha do modelo na tela de Auditoria.`;
+    notice.classList.toggle("success", true);
+    await loadProfiles();
+    $("profile-select").value = body.id;
+  } catch (error) {
+    notice.textContent = error.message;
   }
 });
 

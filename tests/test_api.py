@@ -349,7 +349,6 @@ def fast_hashing(monkeypatch):
     ("get", "/api/v1/audits"),
     ("get", "/api/v1/metrics"),
     ("get", "/api/v1/auth/me"),
-    ("post", "/api/v1/simulations"),
 ])
 def test_api_requires_sign_in(anonymous, method, path):
     response = getattr(anonymous, method)(path)
@@ -570,3 +569,59 @@ def test_finished_audit_records_duration_and_missing_slips(monkeypatch, tmp_path
     assert main.AUDITS["done"]["missing"][0]["line"] == 2
     assert storage.load_summary("done")["duration_seconds"] == 2.5
     assert storage.load_missing("done")[0]["code"] == "116110"
+
+
+def test_review_records_the_reviewer(client):
+    _stored_page("past", 1)
+    client.put("/api/v1/audits/past/pages/1/review", json={"verdict": "OCR"})
+
+    page = storage.load_page_rows("past")[0]
+    assert page["reviewed_by"] == USER
+    assert page["reviewed_at"]
+
+
+def test_printable_report_shows_the_audit(client):
+    _stored_page("past", 1)
+    storage.update_status("past", "completed")
+    client.put("/api/v1/audits/past/pages/1/review", json={"verdict": "OCR"})
+
+    response = client.get("/api/v1/audits/past/report.html")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Relatório de auditoria" in response.text
+    assert "Erro do OCR" in response.text
+    assert USER in response.text
+
+
+def test_printable_report_waits_for_a_running_audit(client):
+    _stored_page("running", 1)
+    assert client.get("/api/v1/audits/running/report.html").status_code == 409
+
+
+def test_printable_report_hides_other_users_audits(client):
+    _stored_page("theirs", 1, owner="someone-else")
+    storage.update_status("theirs", "completed")
+    assert client.get("/api/v1/audits/theirs/report.html").status_code == 404
+
+
+def test_export_holds_only_the_users_audits(client):
+    import io
+    import zipfile
+
+    _stored_page("mine", 1, status="OK")
+    _stored_page("theirs", 1, owner="someone-else")
+
+    response = client.get("/api/v1/export.zip")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "attachment" in response.headers["content-disposition"]
+    audits = zipfile.ZipFile(io.BytesIO(response.content)).read("auditorias.csv").decode("utf-8")
+    assert "mine" in audits
+    assert "theirs" not in audits
+
+
+def test_export_and_report_require_sign_in(anonymous):
+    assert anonymous.get("/api/v1/export.zip").status_code == 401
+    assert anonymous.get("/api/v1/audits/x/report.html").status_code == 401

@@ -42,14 +42,6 @@ const metrics = [{
   consensus_pages: 1, matched: 1, flagged: 1, document_discrepancies: 0, ocr_errors: 1, pending_review: 0,
   avg_code_confidence: 71.5, avg_amount_confidence: 89,
 }];
-const simulationState = {
-  simulation_id: 's1', status: 'completed', wall_seconds: 12.4,
-  summary: { users: 2, pages: 6, pages_per_minute: 29, failed_users: 0, isolation_passed: true },
-  users: ['sim-s1-1', 'sim-s1-2'].map((username) => ({
-    username, status: 'completed', job_id: `job-${username}`, total: 3, processed: 3, matched: 2, mismatched: 1,
-    login_ms: 210, first_page_seconds: 2.5, seconds: 9.1, isolated: true, isolation_detail: 'blocked (404)', error: null,
-  })),
-};
 
 function setup() {
   const html = fs.readFileSync(path.join(staticPath, 'index.html'), 'utf8');
@@ -96,8 +88,7 @@ function setup() {
         return respond({ ...rows[1], Review: JSON.parse(options.body).verdict || '' });
       }
       if (url === '/api/v1/metrics') return respond(metrics);
-      if (url === '/api/v1/simulations') return respond({ simulation_id: 's1' });
-      if (url === '/api/v1/simulations/s1') return respond(simulationState);
+      if (url === '/api/v1/profiles') return respond([{ id: 'padrao', name: 'Guia padrão', description: '', built_in: true }]);
       throw new Error(`Unexpected request: ${method} ${url}`);
     },
   });
@@ -140,7 +131,7 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
 
   await nodes.get('auditForm').listeners.submit({ preventDefault() {} });
   const upload = requests.find((request) => request.method === 'POST' && request.url.startsWith('/api/v1/audits'));
-  assert.equal(upload.url, '/api/v1/audits?dpi=300');
+  assert.equal(upload.url, '/api/v1/audits?dpi=300&profile=padrao');
   assert.deepEqual([...upload.body.keys()], ['payment_slips', 'reference']);
   assert.equal(streams[0].url, '/api/v1/audits/sample/events');
 
@@ -162,11 +153,21 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
   assert.match(nodes.get('body-table').children[1].innerHTML, /Erro do OCR/);
   assert.ok(nodes.get('review-ocr').classList.contains('active'));
 
-  nodes.get('mismatch-filter').listeners.change({ target: { checked: true } });
+  assert.equal(nodes.get('count-mismatch').textContent, 1);
+  assert.equal(nodes.get('count-pending').textContent, 0, 'a reviewed page is no longer pending');
+  nodes.get('filter-mismatch').listeners.click();
   assert.deepEqual(nodes.get('body-table').children.map((row) => row.hidden), [true, false]);
+  assert.ok(nodes.get('filter-mismatch').classList.contains('active'));
+  nodes.get('filter-pending').listeners.click();
+  assert.deepEqual(nodes.get('body-table').children.map((row) => row.hidden), [true, true]);
+  nodes.get('filter-all').listeners.click();
+  assert.deepEqual(nodes.get('body-table').children.map((row) => row.hidden), [false, false]);
+  assert.equal(nodes.get('progress-percent').textContent, '100%');
 
   emit({ type: 'end', total_pages: 2, model: 'Tesseract OCR', elapsed_seconds: 4.2, missing });
   assert.equal(nodes.get('link-csv').href, '/api/v1/audits/sample/report.csv');
+  assert.equal(nodes.get('link-report').href, '/api/v1/audits/sample/report.html');
+  assert.equal(nodes.get('link-report').hidden, false);
   assert.equal(nodes.get('missing-block').hidden, false);
   assert.match(nodes.get('missing-list').innerHTML, /Linha 3: código <strong>118870<\/strong>/);
   assert.equal(nodes.get('ind-page-time').textContent, '2,1');
@@ -187,8 +188,8 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
   assert.equal(timers.size, 0);
 });
 
-test('metrics compare resolutions and the simulation reports isolation', async () => {
-  const { nodes, requests, timers } = setup();
+test('metrics compare resolutions and feed the dashboard', async () => {
+  const { nodes } = setup();
   await flush();
   nodes.get('loginForm').listeners.submit({ preventDefault() {} });
   await flush();
@@ -201,18 +202,8 @@ test('metrics compare resolutions and the simulation reports isolation', async (
   assert.match(nodes.get('chart-time').innerHTML, /300 DPI[\s\S]*2,00 s/);
   assert.match(nodes.get('body-metrics').innerHTML, /<strong>300<\/strong>/);
   assert.match(nodes.get('body-metrics').innerHTML, /50,0%/, 'one OCR error in two pages');
+  assert.equal(nodes.get('dash-page-time').textContent, '2,0 s', 'the dashboard reuses the metrics');
+  assert.equal(nodes.get('dash-pending').textContent, 0);
+  assert.match(nodes.get('dash-verdicts').innerHTML, /Erro do OCR <strong>1<\/strong>/);
 
-  nodes.get('tab-simulation').listeners.click();
-  nodes.get('sim-users').value = '2';
-  nodes.get('sim-pages').value = '3';
-  nodes.get('sim-dpi').value = '200';
-  await nodes.get('simulationForm').listeners.submit({ preventDefault() {} });
-  await flush();
-  const start = requests.find((request) => request.url === '/api/v1/simulations');
-  assert.deepEqual(JSON.parse(start.body), { users: 2, pages: 3, dpi: 200 });
-  assert.match(nodes.get('body-simulation').innerHTML, /sim-s1-1[\s\S]*Isolado/);
-  assert.equal(nodes.get('sim-isolation').textContent, 'Aprovado');
-  assert.equal(nodes.get('sim-throughput').textContent, '29,0');
-  assert.equal(timers.size, 0, 'polling stops when the simulation ends');
-  assert.equal(nodes.get('simulation-button').disabled, false);
 });

@@ -49,6 +49,9 @@ Relatorio_Final_Python.csv
 pyconfer.db
 pyconfer.db-wal
 pyconfer.db-shm
+pyconfer-demo.db
+pyconfer-demo.db-wal
+pyconfer-demo.db-shm
 # Local database backups may contain confidential audit data
 backups/
 testee/
@@ -56,3 +59,9 @@ Pictures/
 
 # Tools and packages copied by prepare-usb.bat
 vendor/
+
+# Synthetic batches for live demonstrations (tools/seed_demo.py)
+demo/
+
+# Packages generated for submission
+entrega/

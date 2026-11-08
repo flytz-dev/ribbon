@@ -16,10 +16,10 @@ from core import engine
 
 def fake_pdf_pipeline(monkeypatch):
     """Keep the real audit generator while replacing external PDF/OCR tools."""
-    monkeypatch.setattr(engine, "extract_reference_list", lambda _: [{"code": "113640", "amount": "76,82"}])
+    monkeypatch.setattr(engine, "extract_reference_list", lambda _path, _profile=None: [{"code": "113640", "amount": "76,82"}])
     monkeypatch.setattr(engine.pdf2image, "pdfinfo_from_path", lambda *args, **kwargs: {"Pages": 1})
     monkeypatch.setattr(engine.pdf2image, "convert_from_path", lambda *args, **kwargs: [Image.new("L", (10, 10))])
-    monkeypatch.setattr(engine, "extract_image_fields", lambda _: {
+    monkeypatch.setattr(engine, "extract_image_fields", lambda _img, _profile=None: {
         "code": "113640", "amount": "76,82", "code_conf": 91, "amount_conf": 88,
         "code_box": (1, 1, 5, 3), "amount_box": (1, 5, 5, 7),
     })

@@ -7,15 +7,15 @@ import os
 
 import pandas as pd
 
-from core import engine
+from core import engine, profiles
 
 
-def run_audit(payment_slips_path, reference_path, output_path=None, dpi=engine.DEFAULT_DPI):
+def run_audit(payment_slips_path, reference_path, output_path=None, dpi=engine.DEFAULT_DPI, profile=None):
     output_path = output_path or os.path.join(engine.BASE_DIR, 'Final_Report.csv')
     report, missing = [], []
 
     print(f"Starting PDF rendering (DPI {dpi}, {engine.OCR_WORKERS} OCR workers)...")
-    for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi, include_image=False):
+    for event in engine.stream_audit(payment_slips_path, reference_path, dpi=dpi, include_image=False, profile=profile):
         if event["type"] == "page":
             report.append(event["row"])
         elif event["type"] == "end":
@@ -40,10 +40,15 @@ def main():
     parser.add_argument('--dpi', type=int, default=engine.DEFAULT_DPI, help="PDF rendering resolution.")
     parser.add_argument('--tesseract', default=engine.TESSERACT_PATH, help="Tesseract executable.")
     parser.add_argument('--poppler', default=engine.POPPLER_PATH, help="Poppler binary directory.")
+    parser.add_argument('--profile', default=profiles.DEFAULT_PROFILE_ID, help="Document profile id.")
     args = parser.parse_args()
 
+    try:
+        profile = profiles.get_profile(args.profile)
+    except KeyError:
+        parser.error(f"unknown profile: {args.profile}")
     engine.configure_paths(args.tesseract, args.poppler)
-    run_audit(args.payment_slips, args.reference, args.output, args.dpi)
+    run_audit(args.payment_slips, args.reference, args.output, args.dpi, profile)
 
 
 if __name__ == "__main__":

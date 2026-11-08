@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS audit (
     reference_file TEXT,
     total_pages    INTEGER,
     owner          TEXT,
-    duration_seconds REAL
+    duration_seconds REAL,
+    profile        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS page (
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS page (
     render_ms     INTEGER,
     ocr_ms        INTEGER,
     review        TEXT,
+    reviewed_by   TEXT,
+    reviewed_at   TEXT,
     PRIMARY KEY (job_id, page)
 );
 
@@ -91,7 +94,10 @@ ADDED_COLUMNS = (
     ("page", "render_ms", "INTEGER"),
     ("page", "ocr_ms", "INTEGER"),
     ("page", "review", "TEXT"),
+    ("page", "reviewed_by", "TEXT"),
+    ("page", "reviewed_at", "TEXT"),
     ("audit", "owner", "TEXT"),
+    ("audit", "profile", "TEXT"),
     ("audit", "duration_seconds", "REAL"),
 )
 
@@ -174,13 +180,13 @@ def create_schema() -> None:
 # Audits and report rows
 # ==========================================
 
-def register_audit(job_id, created_at, dpi, payment_slips_file, reference_file, owner=None) -> None:
+def register_audit(job_id, created_at, dpi, payment_slips_file, reference_file, owner=None, profile=None) -> None:
     with _connection() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO audit "
-            "(job_id, created_at, status, dpi, payment_slips_file, reference_file, total_pages, owner) "
-            "VALUES (?, ?, 'processing', ?, ?, ?, NULL, ?)",
-            (job_id, created_at, dpi, payment_slips_file, reference_file, owner),
+            "(job_id, created_at, status, dpi, payment_slips_file, reference_file, total_pages, owner, profile) "
+            "VALUES (?, ?, 'processing', ?, ?, ?, NULL, ?, ?)",
+            (job_id, created_at, dpi, payment_slips_file, reference_file, owner, profile),
         )
 
 
@@ -220,15 +226,27 @@ def save_page(job_id, row: dict) -> None:
         )
 
 
-def set_review(job_id, page, verdict) -> bool:
-    """Record or clear a reviewer's verdict; returns False when the page does not exist."""
+def set_review(job_id, page, verdict, reviewer=None, reviewed_at=None) -> bool:
+    """Record or clear a reviewer's verdict, with who gave it and when.
+
+    Returns False when the page does not exist. Clearing a verdict clears both."""
     if verdict not in REVIEW_VERDICTS + (None,):
         raise ValueError(f"Unknown review verdict: {verdict}")
+    if verdict is None:
+        reviewer = reviewed_at = None
     with _connection() as connection:
         cursor = connection.execute(
-            "UPDATE page SET review = ? WHERE job_id = ? AND page = ?", (verdict, job_id, page)
+            "UPDATE page SET review = ?, reviewed_by = ?, reviewed_at = ? WHERE job_id = ? AND page = ?",
+            (verdict, reviewer, reviewed_at, job_id, page),
         )
     return cursor.rowcount > 0
+
+
+def load_page_rows(job_id) -> list[dict]:
+    """Stored pages with database column names, including who reviewed each one and when."""
+    with _connection() as connection:
+        rows = connection.execute("SELECT * FROM page WHERE job_id = ? ORDER BY page", (job_id,)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def load_report(job_id) -> list[dict]:
@@ -263,6 +281,9 @@ SELECT a.job_id,
        a.total_pages,
        a.dpi,
        a.owner,
+       a.profile,
+       a.payment_slips_file,
+       a.reference_file,
        a.duration_seconds,
        COUNT(p.page)                                              AS processed_pages,
        COALESCE(SUM(p.overall_status = 'OK'), 0)                      AS matched,
@@ -291,6 +312,38 @@ def list_audits(limit: int = 50, owner: str | None = None) -> list[dict]:
             (*parameters, limit),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ==========================================
+# Export for external analysis (Power BI)
+# ==========================================
+
+_OWNED = "(a.owner = ? OR a.owner IS NULL)"
+
+
+def export_tables(owner: str) -> dict[str, list[dict]]:
+    """Raw rows of the owner's audits, their pages, and reference entries without a slip."""
+    with _connection() as connection:
+        audits = connection.execute(
+            f"SELECT a.*, (SELECT COUNT(*) FROM missing_slip m WHERE m.job_id = a.job_id) AS missing_slips "
+            f"FROM audit a WHERE {_OWNED} ORDER BY a.created_at, a.rowid",
+            (owner,),
+        ).fetchall()
+        pages = connection.execute(
+            f"SELECT p.* FROM page p JOIN audit a ON a.job_id = p.job_id WHERE {_OWNED} "
+            "ORDER BY a.created_at, a.rowid, p.page",
+            (owner,),
+        ).fetchall()
+        missing = connection.execute(
+            f"SELECT m.* FROM missing_slip m JOIN audit a ON a.job_id = m.job_id WHERE {_OWNED} "
+            "ORDER BY a.created_at, a.rowid, m.reference_line",
+            (owner,),
+        ).fetchall()
+    return {
+        "audits": [dict(row) for row in audits],
+        "pages": [dict(row) for row in pages],
+        "missing": [dict(row) for row in missing],
+    }
 
 
 # ==========================================

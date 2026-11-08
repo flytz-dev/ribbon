@@ -263,3 +263,30 @@ def test_deleted_session_no_longer_authenticates():
     storage.delete_session("token")
 
     assert storage.session_user("token", now=60.0) is None
+
+
+def test_review_records_who_and_when(registered_audit):
+    storage.save_page(registered_audit, _row(1, "ERROR"))
+
+    storage.set_review(registered_audit, 1, storage.REVIEW_DOCUMENT, "ana", "2026-11-07T10:00:00")
+    page = storage.load_page_rows(registered_audit)[0]
+    assert (page["review"], page["reviewed_by"], page["reviewed_at"]) == ("DOCUMENT", "ana", "2026-11-07T10:00:00")
+
+    storage.set_review(registered_audit, 1, None, "ana", "2026-11-07T10:05:00")
+    page = storage.load_page_rows(registered_audit)[0]
+    assert (page["review"], page["reviewed_by"], page["reviewed_at"]) == (None, None, None)
+
+
+def test_export_tables_hold_only_the_owners_audits():
+    storage.register_audit("mine", "2026-11-01T09:00:00", 300, "a.pdf", "b.pdf", owner="ana")
+    storage.register_audit("theirs", "2026-11-01T10:00:00", 300, "c.pdf", "d.pdf", owner="bia")
+    for job_id in ("mine", "theirs"):
+        storage.save_page(job_id, _row(1))
+        storage.finish_audit(job_id, 2.0, [{"line": 2, "code": "116110", "amount": "82,30"}])
+
+    tables = storage.export_tables("ana")
+
+    assert [audit["job_id"] for audit in tables["audits"]] == ["mine"]
+    assert tables["audits"][0]["missing_slips"] == 1
+    assert [page["job_id"] for page in tables["pages"]] == ["mine"]
+    assert [entry["job_id"] for entry in tables["missing"]] == ["mine"]
