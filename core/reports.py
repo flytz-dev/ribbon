@@ -33,7 +33,8 @@ CATEGORY = {
     "OTHER REGISTRATION": "Outro cadastro",
 }
 
-MATCHED_BY = {"CODE": "Código", "AMOUNT": "Valor", "POSITION": "Posição", "DUPLICATE": "Código repetido"}
+MATCHED_BY = {"CODE": "Código", "AMOUNT": "Valor", "POSITION": "Posição",
+              "SIMILAR CODE": "Código parecido", "DUPLICATE": "Código repetido"}
 
 VERDICT = {"DOCUMENT": "Divergência real", "OCR": "Erro do OCR"}
 PENDING = "Pendente"

@@ -398,7 +398,13 @@ def read_page(img_gray, is_known, profile=None):
 MATCHED_BY_CODE = "CODE"
 MATCHED_BY_AMOUNT = "AMOUNT"
 MATCHED_BY_POSITION = "POSITION"
+MATCHED_BY_SIMILAR_CODE = "SIMILAR CODE"
 MATCHED_DUPLICATE = "DUPLICATE"
+
+
+def _one_character_apart(first, second):
+    """Same length and exactly one differing character: the typical single-digit misread."""
+    return len(first) == len(second) and sum(a != b for a, b in zip(first, second)) == 1
 
 
 class ReferenceMatcher:
@@ -412,7 +418,14 @@ class ReferenceMatcher:
     the slip's amount, the slip is paired with that entry instead, so a slip after a
     missing one is not compared with the wrong line. Such slips are still flagged,
     because their code did not match. Each entry is used once; entries never paired
-    are reported as missing slips."""
+    are reported as missing slips.
+
+    A code that belongs to an entry already paired is usually a repeated slip. But one
+    misread digit can also turn a slip's code into another code of the same list: then
+    the slip's own entry would be reported missing as well, one error shown twice. So
+    when exactly one unused entry has the slip's amount and a code that differs from the
+    reading in a single character, the slip is paired with it (SIMILAR CODE) and still
+    flagged; otherwise it stays a DUPLICATE."""
 
     def __init__(self, entries, profile=None):
         self.entries = entries
@@ -458,6 +471,18 @@ class ReferenceMatcher:
                 if self._matchable(index) and self.entries[index]["amount"] == amount]
         return same[0] if len(same) == 1 else None
 
+    def _similar_code(self, code, amount):
+        """The single unused entry with this amount whose code differs from the reading in one character."""
+        read = self._suffix(code)
+        if not read or amount in _EMPTY_AMOUNT_READINGS or amount == "N/A":
+            return None
+        close = [
+            index for index in range(len(self.entries))
+            if self._matchable(index) and self.entries[index]["amount"] == amount
+            and _one_character_apart(read, self._suffix(self.entries[index]["code"]))
+        ]
+        return close[0] if len(close) == 1 else None
+
     def match(self, code, amount=None):
         """Return (entry index or None, how it was matched)."""
         candidates = self._by_suffix.get(self._suffix(code), [])
@@ -469,6 +494,10 @@ class ReferenceMatcher:
             self._take(index)
             return index, MATCHED_BY_CODE
         if candidates:
+            similar = self._similar_code(code, amount)
+            if similar is not None:
+                self._take(similar)
+                return similar, MATCHED_BY_SIMILAR_CODE
             # Every entry with this code was already paired: the slip is a repeat.
             return candidates[0], MATCHED_DUPLICATE
 
@@ -594,7 +623,8 @@ def classify_discrepancy(result, matched_by):
     if result["code_status"] != "OK":
         if result["code"] in _EMPTY_CODE_READINGS:
             return CATEGORY_UNREAD
-        if matched_by in (MATCHED_BY_POSITION, MATCHED_BY_AMOUNT) and result["amount_status"] == "OK":
+        fallback = (MATCHED_BY_POSITION, MATCHED_BY_AMOUNT, MATCHED_BY_SIMILAR_CODE)
+        if matched_by in fallback and result["amount_status"] == "OK":
             return CATEGORY_LIKELY_MISREAD
         return CATEGORY_REVIEW
 
