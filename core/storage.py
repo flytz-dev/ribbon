@@ -4,6 +4,7 @@ The API persists audit metadata and report rows, but not annotated images.
 The OCR engine does not depend on this module."""
 
 import contextlib
+import json
 import os
 import sqlite3
 
@@ -54,6 +55,11 @@ CREATE TABLE IF NOT EXISTS page (
     review        TEXT,
     reviewed_by   TEXT,
     reviewed_at   TEXT,
+    readings      TEXT,
+    corrected_code   TEXT,
+    corrected_amount TEXT,
+    corrected_by     TEXT,
+    corrected_at     TEXT,
     PRIMARY KEY (job_id, page)
 );
 
@@ -96,6 +102,11 @@ ADDED_COLUMNS = (
     ("page", "review", "TEXT"),
     ("page", "reviewed_by", "TEXT"),
     ("page", "reviewed_at", "TEXT"),
+    ("page", "readings", "TEXT"),
+    ("page", "corrected_code", "TEXT"),
+    ("page", "corrected_amount", "TEXT"),
+    ("page", "corrected_by", "TEXT"),
+    ("page", "corrected_at", "TEXT"),
     ("audit", "owner", "TEXT"),
     ("audit", "profile", "TEXT"),
     ("audit", "duration_seconds", "REAL"),
@@ -122,7 +133,15 @@ _COLUMNS = (
     ("Render ms", "render_ms"),
     ("OCR ms", "ocr_ms"),
     ("Review", "review"),
+    ("Corrected Code", "corrected_code"),
+    ("Corrected Amount", "corrected_amount"),
+    ("Corrected By", "corrected_by"),
+    ("Corrected At", "corrected_at"),
+    ("Readings", "readings"),
 )
+
+# Text columns that read as "" rather than None, as in the live stream.
+_BLANK_WHEN_EMPTY = ("Review", "Corrected Code", "Corrected Amount", "Corrected By", "Corrected At")
 
 # Human verdicts on a flagged page.
 REVIEW_DOCUMENT = "DOCUMENT"  # the document really differs from the reference
@@ -214,9 +233,18 @@ def finish_audit(job_id, duration_seconds, missing) -> None:
         )
 
 
+def _stored_value(label, value):
+    """Readings are stored as JSON; an empty correction is stored as NULL."""
+    if label == "Readings":
+        return json.dumps(value, ensure_ascii=False) if value else None
+    if label.startswith("Corrected"):
+        return value or None
+    return value
+
+
 def save_page(job_id, row: dict) -> None:
     """Persist each processed page so an interrupted audit retains earlier results."""
-    values = [job_id] + [row.get(label) for label, _column in _COLUMNS]
+    values = [job_id] + [_stored_value(label, row.get(label)) for label, _column in _COLUMNS]
     columns = ", ".join(column for _label, column in _COLUMNS)
     placeholders = ", ".join("?" for _ in _COLUMNS)
     with _connection() as connection:
@@ -259,9 +287,35 @@ def load_report(job_id) -> list[dict]:
 
     report = [{label: row[column] for label, column in _COLUMNS} for row in rows]
     for item in report:
-        # Unreviewed pages read the same as in the live stream.
-        item["Review"] = item["Review"] or ""
+        # Unreviewed and uncorrected pages read the same as in the live stream.
+        for label in _BLANK_WHEN_EMPTY:
+            item[label] = item[label] or ""
+        # Audits made before readings were recorded have none.
+        item["Readings"] = json.loads(item["Readings"]) if item["Readings"] else []
     return report
+
+
+def set_correction(job_id, page, code, amount, corrector, corrected_at, verdict) -> bool:
+    """Record the code and amount a reviewer read on the slip, with the verdict they imply.
+
+    code and amount are the corrected values; None keeps the OCR reading for that field.
+    Both None clears the correction and leaves the verdict as it was."""
+    if verdict not in REVIEW_VERDICTS + (None,):
+        raise ValueError(f"Unknown review verdict: {verdict}")
+    with _connection() as connection:
+        if code is None and amount is None:
+            cursor = connection.execute(
+                "UPDATE page SET corrected_code = NULL, corrected_amount = NULL, corrected_by = NULL, "
+                "corrected_at = NULL WHERE job_id = ? AND page = ?",
+                (job_id, page),
+            )
+        else:
+            cursor = connection.execute(
+                "UPDATE page SET corrected_code = ?, corrected_amount = ?, corrected_by = ?, corrected_at = ?, "
+                "review = ?, reviewed_by = ?, reviewed_at = ? WHERE job_id = ? AND page = ?",
+                (code, amount, corrector, corrected_at, verdict, corrector, corrected_at, job_id, page),
+            )
+    return cursor.rowcount > 0
 
 
 def load_missing(job_id) -> list[dict]:

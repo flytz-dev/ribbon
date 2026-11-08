@@ -123,3 +123,19 @@ def test_report_escapes_file_names():
     summary = {**AUDIT, "payment_slips_file": "<script>x</script>.pdf"}
     page = reports.render_audit_report(summary, [], [], "Guia padrão", datetime(2026, 11, 7))
     assert "<script>x</script>" not in page
+
+
+def test_export_and_report_carry_the_correction():
+    pages = [_page(1, "ERROR", "OCR", ocr_amount="16,82", amount_status="MISMATCH", category="REVIEW",
+                   corrected_amount="1.234,56", corrected_by="ana", corrected_at="2026-11-07T10:30:00")]
+    tables = {"audits": [AUDIT], "pages": pages, "missing": []}
+    files = reports.export_files(tables, {})
+
+    page = _read(files["paginas.csv"])[0]
+    assert (page["valor_corrigido"], page["corrigido_por"], page["data_correcao"]) == (
+        "1234,56", "ana", "2026-11-07 10:30:00")
+    assert page["codigo_corrigido"] == ""
+    assert _read(files["auditorias.csv"])[0]["corrigidas"] == "1"
+
+    html = _report(pages, [])
+    assert "corrigido: <span class='mono'>1.234,56</span>" in html

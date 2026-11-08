@@ -361,6 +361,30 @@
                 <span class="review-status" id="review-status"></span>
               </div>
 
+              <div class="correction-box" id="correction-box" hidden>
+                <div class="correction-header">
+                  <span class="review-question">O que cada estratégia leu</span>
+                  <span class="hint" id="readings-hint">Clique numa leitura para usá-la na correção. Confira sempre na imagem.</span>
+                </div>
+                <table class="readings-table">
+                  <thead><tr><th>Estratégia</th><th>Código</th><th>Valor</th></tr></thead>
+                  <tbody id="readings-body"></tbody>
+                </table>
+                <div class="correction-form">
+                  <label class="field">
+                    <span class="label">Código impresso na guia</span>
+                    <input type="text" id="correction-code" autocomplete="off" spellcheck="false">
+                  </label>
+                  <label class="field">
+                    <span class="label">Valor impresso na guia</span>
+                    <input type="text" id="correction-amount" autocomplete="off" spellcheck="false" placeholder="1.234,56">
+                  </label>
+                  <button type="button" class="primary-button" id="correction-save">Salvar correção</button>
+                  <button type="button" class="link-button" id="correction-clear" hidden>Desfazer correção</button>
+                </div>
+                <p class="review-status" id="correction-status"></p>
+              </div>
+
               <div class="viewer" id="viewer">
                 <p class="empty">A imagem da guia aparecerá aqui, com destaque em<br>
                   <i class="marker blue"></i> código e <i class="marker green"></i> valor localizados pelo OCR.</p>

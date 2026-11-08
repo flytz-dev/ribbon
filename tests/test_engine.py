@@ -389,6 +389,11 @@ def test_vote_counts_agreeing_strategies_and_averages_confidence():
     assert result["code_conf"] == 80
     assert result["amount_votes"] == 2
     assert result["strategies_run"] == 3
+    assert result["readings"] == [
+        {"strategy": "1. Default", "code": "113840", "amount": "76,82"},
+        {"strategy": "2. Dark", "code": "113640", "amount": "76,82"},
+        {"strategy": "3. Sharpness", "code": "113640", "amount": ""},
+    ], "every strategy's reading is kept for the reviewer"
 
 
 def test_vote_without_readings_returns_sentinels():

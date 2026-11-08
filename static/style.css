@@ -513,6 +513,33 @@ button:disabled, button:disabled:hover { background: #c6c6c6 !important; color: 
 }
 .review-status { font-size: 12px; color: var(--text-secondary); }
 .shortcut-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-helper); }
+
+/* Manual correction: every strategy's reading, and the values the reviewer confirms */
+.correction-box { margin: 0 0 16px; padding: 12px 16px; background: var(--background); }
+.correction-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 8px; }
+.correction-header .review-question { flex: 0 0 auto; }
+.correction-header .hint { font-size: 12px; color: var(--text-helper); }
+.readings-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--layer); }
+.readings-table th { text-align: left; font-weight: 600; font-size: 12px; padding: 6px 8px; background: var(--layer-accent); }
+.readings-table td { padding: 2px 4px; border-top: 1px solid var(--border-subtle); }
+.readings-table td:first-child { padding-left: 8px; color: var(--text-secondary); white-space: nowrap; }
+.reading-pick {
+  width: 100%; min-height: 32px; padding: 0 8px; text-align: left;
+  border: 1px solid transparent; background: transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: 13px; color: var(--text);
+}
+.reading-pick:hover { border-color: var(--interactive); background: var(--selected); }
+.reading-pick.chosen { background: var(--selected); font-weight: 600; }
+.reading-pick .same { margin-left: 6px; font-family: var(--font-sans); font-size: 11px; color: var(--ok); }
+.reading-empty { padding: 0 8px; color: var(--text-helper); font-style: italic; }
+.correction-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin-top: 12px; }
+.correction-form .field { flex: 1 1 140px; }
+.correction-form .field input { font-family: var(--font-mono); background: var(--layer); }
+.correction-form .primary-button { min-height: 40px; }
+.corrected-badge {
+  display: inline-block; margin-left: 4px; padding: 0 8px; border-radius: 12px;
+  font-size: 12px; background: var(--layer-accent); color: var(--text);
+}
 .shortcut-hint kbd { margin: 0 2px; }
 
 .viewer {
