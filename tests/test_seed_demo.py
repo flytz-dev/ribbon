@@ -30,3 +30,20 @@ def test_existing_history_is_not_touched_without_force():
     storage.register_audit("real", "2026-11-06T10:00:00", 300, "a.pdf", "b.pdf", owner="admin")
     with pytest.raises(SystemExit):
         seed_demo.main([])
+
+
+def test_large_batch_writes_only_its_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(seed_demo, "DEMO_DIR", str(tmp_path))
+
+    assert seed_demo.main(["--lote-grande", "12"]) == 0
+
+    folder = tmp_path / "lote-12"
+    assert sorted(path.name for path in folder.iterdir()) == ["LEIA-ME.txt", "gabarito.csv", "guias.pdf", "lista-mestre.pdf"]
+    assert "lista mestre com 12 linhas; 11 guias" in (folder / "LEIA-ME.txt").read_text(encoding="utf-8")
+    assert [path.name for path in tmp_path.iterdir()] == ["lote-12"]
+    assert storage.list_audits() == []
+
+
+def test_large_batch_needs_enough_slips():
+    with pytest.raises(SystemExit):
+        seed_demo.main(["--lote-grande", "3"])

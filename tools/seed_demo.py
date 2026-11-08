@@ -11,6 +11,7 @@ It also writes two batches for live demonstrations to demo/ (ignored by git).
     python -m tools.seed_demo                    # refuses to touch a database with audits
     python -m tools.seed_demo --force            # adds to it, after a backup in backups/
     python -m tools.seed_demo --user ana --password "senha-de-teste"
+    python -m tools.seed_demo --lote-grande 250  # only writes demo/lote-250 (a long recorded audit)
 
 The account and password are for demonstrations only. Never use them for real data."""
 
@@ -194,13 +195,43 @@ def write_live_batches():
     print("\n".join(lines))
 
 
+LARGE_BATCH_SEED = 2500
+
+
+def write_large_batch(slips):
+    """A long batch for recording a full audit: the same three planned problems, among many slips."""
+    name = f"lote-{slips}"
+    folder = os.path.join(DEMO_DIR, name)
+    shutil.rmtree(folder, ignore_errors=True)
+    dataset = samples.generate_dataset(folder, slips=slips, seed=LARGE_BATCH_SEED, style="padrao")
+    for key, file_name in LIVE_FILE_NAMES.items():
+        os.replace(dataset[key], os.path.join(folder, file_name))
+    lines = [
+        f"{name}/  (modelo: {profiles.get_profile(STYLE_PROFILE['padrao']).name})",
+        f"  - lista mestre com {slips} linhas; {dataset['pages']} guias",
+        *(f"  - {_in_portuguese(item)}" for item in dataset["scenario"]),
+        "  - outras divergências que aparecerem são leituras do OCR: confira no gabarito.csv",
+    ]
+    with open(os.path.join(folder, "LEIA-ME.txt"), "w", encoding="utf-8") as file:
+        file.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--user", default=DEMO_USER, help="Account that owns the demo audits.")
     parser.add_argument("--password", default=DEMO_PASSWORD, help="Password for a new demo account (8+ characters).")
     parser.add_argument("--force", action="store_true", help="Add to a database that already has audits (backs it up first).")
     parser.add_argument("--skip-audits", action="store_true", help="Only write the live-demo batches.")
+    parser.add_argument("--lote-grande", type=int, metavar="GUIAS",
+                        help="Only write demo/lote-GUIAS, a long batch for recording a full audit.")
     args = parser.parse_args(argv)
+
+    if args.lote_grande:
+        if args.lote_grande < 10:
+            parser.error("--lote-grande needs at least 10 slips")
+        write_large_batch(args.lote_grande)
+        return 0
 
     storage.create_schema()
     if not args.skip_audits:
