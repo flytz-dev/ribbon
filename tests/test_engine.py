@@ -235,6 +235,51 @@ def test_repeated_registration_is_a_duplicate():
     assert missing == [3, 4]
 
 
+SIMILAR = [
+    {"code": "95520", "amount": "82,30"},
+    {"code": "113640", "amount": "76,82"},
+    {"code": "98520", "amount": "82,30"},
+    {"code": "59750", "amount": "64,15"},
+]
+
+
+def test_misread_into_another_listed_code_pairs_with_the_similar_entry():
+    """98520 read as 95520, which an earlier slip already took: one error, not a duplicate plus a missing line."""
+    readings = [("95520", "82,30"), ("113640", "76,82"), ("95520", "82,30"), ("59750", "64,15")]
+    pairs, missing = _pair_readings(readings, SIMILAR)
+    assert pairs[2] == (3, "SIMILAR CODE")
+    assert missing == []
+
+
+def test_similar_code_pairing_keeps_the_page_flagged_as_likely_misread():
+    entry = SIMILAR[2]
+    reading = {"code": "95520", "amount": "82,30"}
+    code, amount, overall = engine.compare_reading(reading, entry, engine.MATCHED_BY_SIMILAR_CODE)
+    assert (code, amount, overall) == ("MISMATCH", "OK", "ERROR")
+    result = _result(code="95520", code_status=code, amount_status=amount)
+    assert engine.classify_discrepancy(result, engine.MATCHED_BY_SIMILAR_CODE) == engine.CATEGORY_LIKELY_MISREAD
+
+
+def test_a_slip_scanned_twice_stays_a_duplicate():
+    readings = [("95520", "82,30"), ("95520", "82,30")]
+    entries = [SIMILAR[0], {"code": "98520", "amount": "64,15"}]
+    pairs, missing = _pair_readings(readings, entries)
+    assert pairs[1] == (1, "DUPLICATE"), "the free entry has another amount"
+    assert missing == [2]
+
+
+def test_more_than_one_similar_entry_stays_a_duplicate():
+    entries = SIMILAR + [{"code": "95510", "amount": "82,30"}]
+    pairs, _missing = _pair_readings([("95520", "82,30"), ("95520", "82,30")], entries)
+    assert pairs[1] == (1, "DUPLICATE")
+
+
+def test_codes_two_digits_apart_are_not_similar():
+    entries = [SIMILAR[0], {"code": "98420", "amount": "82,30"}]
+    pairs, _missing = _pair_readings([("95520", "82,30"), ("95520", "82,30")], entries)
+    assert pairs[1] == (1, "DUPLICATE")
+
+
 def test_extra_slip_after_the_list_ends():
     pairs, _missing = _pair(["113640", "116110", "118870", "59750", "999990"])
     assert pairs[-1] == (None, "POSITION")
