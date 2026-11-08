@@ -285,6 +285,7 @@ Interactive API documentation is available at [localhost:8000/docs](http://local
 | `GET` | `/api/v1/audits/{job_id}/missing` | Reference entries that no slip was paired with. |
 | `PUT` | `/api/v1/audits/{job_id}/pages/{page}/review` | Record a review: JSON `verdict` of `DOCUMENT`, `OCR`, or `null` to clear it. |
 | `GET` | `/api/v1/audits/{job_id}/report.csv` | Download the available report rows, then missing slips, as CSV. |
+| `PUT` | `/api/v1/audits/{job_id}/pages/{page}/correction` | The reviewer's corrected code and/or amount for a flagged page (picked from any strategy's reading or typed); sets the verdict and keeps the OCR reading. Both null undoes it. |
 | `GET` | `/api/v1/audits/{job_id}/report.html` | Printable A4 report (discrepancies, verdicts with reviewer and date, missing slips); the browser saves it as PDF. |
 | `GET` | `/api/v1/metrics` | Timing, flagged pages, reviews, and confidence for each resolution. |
 | `GET` | `/api/v1/export.zip` | The user's audits, pages, and missing slips as Portuguese CSV files for Power BI or Excel, with a data dictionary (`LEIA-ME.txt`). |

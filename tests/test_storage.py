@@ -27,6 +27,11 @@ def _row(page, overall_status="OK", code="113640", amount="76,82", category="", 
         "Render ms": 400,
         "OCR ms": 600,
         "Review": "",
+        "Corrected Code": "",
+        "Corrected Amount": "",
+        "Corrected By": "",
+        "Corrected At": "",
+        "Readings": [],
         **metrics,
     }
 
@@ -54,7 +59,7 @@ def test_report_uses_engine_format(registered_audit):
     report = storage.load_report(registered_audit)
 
     assert len(report) == 1
-    assert set(report[0]) == set(engine.REPORT_COLUMNS)
+    assert set(report[0]) == set(engine.ROW_COLUMNS)
     assert report[0] == _row(1)
 
 
@@ -290,3 +295,27 @@ def test_export_tables_hold_only_the_owners_audits():
     assert tables["audits"][0]["missing_slips"] == 1
     assert [page["job_id"] for page in tables["pages"]] == ["mine"]
     assert [entry["job_id"] for entry in tables["missing"]] == ["mine"]
+
+
+def test_readings_and_corrections_are_kept():
+    storage.register_audit("job2", "2026-11-07T10:00:00", 300, "a.pdf", "b.pdf")
+    readings = [{"strategy": "1. Default", "code": "113640", "amount": "16,82"},
+                {"strategy": "3. Sharpness", "code": "113640", "amount": "76,82"}]
+    storage.save_page("job2", _row(1, "ERROR", Readings=readings))
+    assert storage.load_report("job2")[0]["Readings"] == readings
+
+    assert storage.set_correction("job2", 1, None, "76,82", "ana", "2026-11-07T10:05:00", storage.REVIEW_OCR)
+    row = storage.load_report("job2")[0]
+    assert (row["Corrected Code"], row["Corrected Amount"], row["Corrected By"]) == ("", "76,82", "ana")
+    assert row["Review"] == "OCR"
+    page = storage.load_page_rows("job2")[0]
+    assert (page["reviewed_by"], page["corrected_at"]) == ("ana", "2026-11-07T10:05:00")
+
+    storage.set_correction("job2", 1, None, None, "ana", "2026-11-07T10:06:00", None)
+    row = storage.load_report("job2")[0]
+    assert (row["Corrected Amount"], row["Corrected By"]) == ("", "")
+    assert row["Review"] == "OCR", "clearing a correction keeps the verdict"
+
+
+def test_correction_of_unknown_page_reports_failure(registered_audit):
+    assert storage.set_correction(registered_audit, 9, "1", None, "ana", "x", storage.REVIEW_DOCUMENT) is False

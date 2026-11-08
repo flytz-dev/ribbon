@@ -53,7 +53,7 @@ def test_upload_stream_history_and_csv_share_english_contract(monkeypatch):
             assert events[1]["row"]["Matched By"] == "CODE"
             assert events[1]["row"]["Code Confidence"] == 91
             assert events[1]["row"]["Strategies Run"] == 1
-            assert set(events[1]["row"]) == set(engine.REPORT_COLUMNS)
+            assert set(events[1]["row"]) == set(engine.ROW_COLUMNS)
             assert events[2]["model"] == "Tesseract OCR"
             assert events[2]["missing"] == []
             assert events[2]["elapsed_seconds"] >= 0

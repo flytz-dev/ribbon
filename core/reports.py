@@ -90,6 +90,7 @@ def page_counts(pages):
         "document": sum(page.get("review") == "DOCUMENT" for page in flagged),
         "ocr": sum(page.get("review") == "OCR" for page in flagged),
         "pending": sum(not page.get("review") for page in flagged),
+        "corrected": sum(bool(page.get("corrected_code") or page.get("corrected_amount")) for page in flagged),
     }
 
 
@@ -100,7 +101,7 @@ def page_counts(pages):
 AUDIT_COLUMNS = (
     "id_auditoria", "data_hora", "data", "usuario", "modelo_id", "modelo", "dpi", "arquivo_guias",
     "arquivo_lista", "situacao", "paginas", "conformes", "divergentes", "sem_guia",
-    "divergencias_reais", "erros_ocr", "pendentes", "duracao_segundos", "segundos_por_pagina",
+    "divergencias_reais", "erros_ocr", "pendentes", "corrigidas", "duracao_segundos", "segundos_por_pagina",
 )
 
 PAGE_COLUMNS = (
@@ -108,7 +109,7 @@ PAGE_COLUMNS = (
     "valor_lista", "valor_lido", "valor_confere", "resultado", "categoria", "pareada_por",
     "confianca_codigo", "confianca_valor", "votos_codigo", "votos_valor", "estrategias_executadas",
     "usou_consenso", "tempo_imagem_ms", "tempo_ocr_ms", "tempo_total_s", "parecer", "revisor",
-    "data_parecer",
+    "data_parecer", "codigo_corrigido", "valor_corrigido", "corrigido_por", "data_correcao",
 )
 
 MISSING_COLUMNS = ("id_auditoria", "linha_lista", "codigo", "valor")
@@ -137,6 +138,7 @@ def _audit_row(audit, pages, profile_names):
         "divergencias_reais": counts["document"],
         "erros_ocr": counts["ocr"],
         "pendentes": counts["pending"],
+        "corrigidas": counts["corrected"],
         "duracao_segundos": decimal(duration, 1),
         "segundos_por_pagina": decimal(duration / counts["pages"]) if duration and counts["pages"] else "",
     }
@@ -175,6 +177,10 @@ def _page_row(page):
         "parecer": verdict_label(page),
         "revisor": (page.get("reviewed_by") or "") if reviewed else "",
         "data_parecer": _iso(page.get("reviewed_at")) if reviewed else "",
+        "codigo_corrigido": page.get("corrected_code") or "",
+        "valor_corrigido": amount_number(page.get("corrected_amount")),
+        "corrigido_por": page.get("corrected_by") or "",
+        "data_correcao": _iso(page.get("corrected_at")),
     }
 
 
@@ -263,6 +269,7 @@ sem_guia             lançamentos da lista sem guia correspondente
 divergencias_reais   divergentes em que o revisor confirmou que o documento difere da lista
 erros_ocr            divergentes em que o revisor apontou erro de leitura do OCR
 pendentes            divergentes ainda sem parecer
+corrigidas           divergentes em que o revisor corrigiu o código ou o valor lido
 duracao_segundos     tempo total da leitura do lote
 segundos_por_pagina  duracao_segundos / paginas
 
@@ -292,6 +299,10 @@ tempo_total_s           soma dos dois, em segundos
 parecer                 Divergência real, Erro do OCR, Pendente (divergente sem parecer) ou vazio (conforme)
 revisor                 quem deu o parecer
 data_parecer            quando o parecer foi dado
+codigo_corrigido        código que o revisor confirmou na imagem (vazio = manteve o lido)
+valor_corrigido         valor que o revisor confirmou na imagem (número; vazio = manteve o lido)
+corrigido_por           quem corrigiu
+data_correcao           quando corrigiu
 
 lancamentos_sem_guia.csv
 ------------------------
@@ -317,11 +328,14 @@ def _e(value):
     return html.escape("" if value is None else str(value))
 
 
-def _comparison(expected, read, matches):
+def _comparison(expected, read, matches, corrected=None):
     if matches:
         return f"<span class='mono'>{_e(read or expected)}</span>"
-    return (f"<span class='mono muted'>{_e(expected or '—')}</span> → "
+    text = (f"<span class='mono muted'>{_e(expected or '—')}</span> → "
             f"<span class='mono bad'>{_e(read or 'não lido')}</span>")
+    if corrected:
+        text += f"<br><span class='fix'>corrigido: <span class='mono'>{_e(corrected)}</span></span>"
+    return text
 
 
 def _page_rows(pages, with_review):
@@ -331,8 +345,8 @@ def _page_rows(pages, with_review):
         cells = [
             f"<td class='num'>{_e(page['page'])}</td>",
             f"<td class='num'>{_e(page.get('reference_line') or '—')}</td>",
-            f"<td>{_comparison(page.get('reference_code'), page.get('ocr_code'), page.get('code_status') == 'OK')}</td>",
-            f"<td>{_comparison(page.get('reference_amount'), page.get('ocr_amount'), page.get('amount_status') == 'OK')}</td>",
+            f"<td>{_comparison(page.get('reference_code'), page.get('ocr_code'), page.get('code_status') == 'OK', page.get('corrected_code'))}</td>",
+            f"<td>{_comparison(page.get('reference_amount'), page.get('ocr_amount'), page.get('amount_status') == 'OK', page.get('corrected_amount'))}</td>",
         ]
         if with_review:
             cells += [
@@ -388,6 +402,7 @@ def render_audit_report(summary, pages, missing, profile_name, generated_at) -> 
         ("Divergências reais", counts["document"], ""),
         ("Erros do OCR", counts["ocr"], ""),
         ("Aguardando parecer", counts["pending"], "bad" if counts["pending"] else ""),
+        ("Corrigidas pelo revisor", counts["corrected"], ""),
     ]
 
     flagged_section = (
@@ -427,7 +442,7 @@ def render_audit_report(summary, pages, missing, profile_name, generated_at) -> 
   .id {{ text-align: right; font-size: 12px; color: #525252; }}
   dl {{ display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 0; }}
   dt {{ color: #525252; }} dd {{ margin: 0; overflow-wrap: anywhere; }}
-  .tiles {{ display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: #e0e0e0;
+  .tiles {{ display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; background: #e0e0e0;
            border: 1px solid #e0e0e0; margin-top: 16px; }}
   .tile {{ background: #fff; padding: 8px; }}
   .tile span {{ display: block; font-size: 11px; color: #525252; min-height: 2.6em; }}
@@ -444,6 +459,7 @@ def render_audit_report(summary, pages, missing, profile_name, generated_at) -> 
   .num {{ text-align: right; width: 3.5em; }}
   .mono {{ font-family: "IBM Plex Mono", Consolas, monospace; }}
   .muted {{ color: #6f6f6f; }} .bad {{ color: #da1e28; font-weight: 600; }}
+  .fix {{ display: inline-block; margin-top: 2px; padding: 0 6px; background: #e7f1fb; color: #0043ce; font-size: 11px; }}
   .tag {{ display: inline-block; padding: 0 8px; border-radius: 12px; font-size: 11px; }}
   .tag-ok {{ background: #a7f0ba; color: #0e6027; }} .tag-bad {{ background: #ffd7d9; color: #a2191f; }}
   .signatures {{ display: grid; grid-template-columns: 2fr 1fr; gap: 32px; margin-top: 40px; break-inside: avoid; }}

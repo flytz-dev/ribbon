@@ -6,6 +6,7 @@ The SSE endpoint consumes those events. Start with uvicorn api.main:app --reload
 import io
 import json
 import queue
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -87,6 +88,11 @@ class AuditSummary(BaseModel):
 
 class ReviewRequest(BaseModel):
     verdict: str | None
+
+
+class CorrectionRequest(BaseModel):
+    code: str | None = None
+    amount: str | None = None
 
 
 class MissingSlip(BaseModel):
@@ -519,6 +525,89 @@ def review_page(job_id: str, page: int, body: ReviewRequest, username: str = Dep
         if not saved:
             raise HTTPException(status_code=404, detail="Page not found.")
         row = next(item for item in storage.load_report(job_id) if item["Page"] == page)
+    return row
+
+
+_TYPED_AMOUNT = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}")
+
+
+def _corrected_amount(text):
+    """A typed or chosen amount in the report format, 1.234,56."""
+    cleaned = re.sub(r"(?i)r\$|\s", "", text or "")
+    if not _TYPED_AMOUNT.fullmatch(cleaned):
+        return None
+    integer, cents = cleaned.replace(".", "").split(",")
+    return f"{int(integer):,}".replace(",", ".") + "," + cents
+
+
+def _corrected_code(text, profile):
+    """A typed or chosen code in its canonical form, as the OCR would report it."""
+    cleaned = (text or "").strip()
+    if not cleaned or len(cleaned) > 40:
+        return None
+    return profile.code_from_text(cleaned, profile.reference_code) or cleaned
+
+
+def _audit_profile(job_id):
+    summary = storage.load_summary(job_id) or {}
+    try:
+        return profiles.get_profile(summary.get("profile"))
+    except KeyError:
+        return profiles.get_profile(None)
+
+
+@app.put("/api/v1/audits/{job_id}/pages/{page}/correction", tags=["Review"])
+def correct_page(job_id: str, page: int, body: CorrectionRequest, username: str = Depends(auth.current_user)):
+    """Record the code and amount the reviewer reads on a flagged slip.
+
+    The reviewer may pick a reading from any strategy or type one. A field left null keeps
+    the OCR reading; both null clears the correction. The correction implies the verdict:
+    when the corrected slip matches its line in the list, the OCR was wrong (OCR);
+    otherwise the document really differs (DOCUMENT). The OCR reading itself is kept."""
+    audit = _require_audit(job_id, username)
+    rows = audit["report"] if audit else storage.load_report(job_id)
+    row = next((item for item in rows if item["Page"] == page), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Page not found.")
+    if row["Overall Status"] != "ERROR":
+        raise HTTPException(status_code=400, detail="Only flagged pages can be corrected.")
+
+    profile = _audit_profile(job_id)
+    code = amount = verdict = None
+    if body.code is not None:
+        code = _corrected_code(body.code, profile)
+        if code is None:
+            raise HTTPException(status_code=400, detail="Invalid code.")
+    if body.amount is not None:
+        amount = _corrected_amount(body.amount)
+        if amount is None:
+            raise HTTPException(status_code=400, detail="Amount must look like 1.234,56.")
+
+    now = datetime.now().isoformat(timespec="seconds")
+    if code is not None or amount is not None:
+        effective_code = code if code is not None else row["Code (OCR Slips)"]
+        effective_amount = amount if amount is not None else row["Amount (OCR Slips)"]
+        matches = (
+            row["Reference Line"] is not None
+            and engine.code_status(effective_code, row["Code (Reference PDF)"], profile) == "OK"
+            and effective_amount == row["Amount (Reference PDF)"]
+        )
+        verdict = storage.REVIEW_OCR if matches else storage.REVIEW_DOCUMENT
+
+    try:
+        storage.set_correction(job_id, page, code, amount, username, now, verdict)
+    except sqlite3.Error as e:
+        print(f"[history] failed to save correction: {e}")
+
+    cleared = code is None and amount is None
+    row.update({
+        "Corrected Code": code or "",
+        "Corrected Amount": amount or "",
+        "Corrected By": "" if cleared else username,
+        "Corrected At": "" if cleared else now,
+    })
+    if not cleared:
+        row["Review"] = verdict
     return row
 
 

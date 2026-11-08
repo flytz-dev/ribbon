@@ -252,6 +252,7 @@ function resetPanel() {
   $("comparison").hidden = true;
   $("evidence").hidden = true;
   $("review-box").hidden = true;
+  $("correction-box").hidden = true;
   $("tag-strategy").hidden = true;
   $("strategy-dots").hidden = true;
   $("caption-viewer").hidden = true;
@@ -508,7 +509,7 @@ function rowMarkup(event) {
     <td class="${codeMismatch ? "discrepancy" : ""}">${escapeHtml(row["Code (OCR Slips)"])}</td>
     <td>${escapeHtml(row["Amount (Reference PDF)"])}</td>
     <td class="${amountMismatch ? "discrepancy" : ""}">${escapeHtml(row["Amount (OCR Slips)"])}</td>
-    <td>${badge(row["Overall Status"])}${categoryBadge(row["Category"])}${reviewBadge(row["Review"])}</td>
+    <td>${badge(row["Overall Status"])}${categoryBadge(row["Category"])}${reviewBadge(row["Review"])}${correctedBadge(row)}</td>
   `;
 }
 
@@ -641,6 +642,7 @@ function showPage(number) {
   }
 
   showReview(row);
+  showCorrection(row);
 
   const tag = $("tag-strategy");
   if (event.strategy) {
@@ -702,6 +704,104 @@ async function setReview(verdict) {
     $("review-status").textContent = error.message;
   }
 }
+
+/* =========================================================
+   Manual correction — the reviewer picks what is really printed
+   ========================================================= */
+
+function isCorrected(row) {
+  return Boolean(row["Corrected Code"] || row["Corrected Amount"]);
+}
+
+function correctedBadge(row) {
+  if (!isCorrected(row)) return "";
+  const who = row["Corrected By"] ? ` por ${row["Corrected By"]}` : "";
+  return `<span class="corrected-badge" title="Corrigida${escapeHtml(who)}">Corrigida</span>`;
+}
+
+function readingCell(field, value, expected, current) {
+  if (!value) return '<span class="reading-empty">não leu</span>';
+  const same = value === expected ? '<span class="same">= lista</span>' : "";
+  const chosen = value === current ? " chosen" : "";
+  return `<button type="button" class="reading-pick${chosen}" data-field="${field}" data-value="${escapeHtml(value)}"
+    title="Usar esta leitura">${escapeHtml(value)}${same}</button>`;
+}
+
+function renderReadings() {
+  const row = pages.get(selectedPage)?.row;
+  if (!row) return;
+  const code = $("correction-code").value;
+  const amount = $("correction-amount").value;
+  const readings = row["Readings"] || [];
+  $("readings-body").innerHTML = readings.length
+    ? readings.map((reading) => `<tr>
+        <td>${escapeHtml(STRATEGY_NAMES[reading.strategy] || reading.strategy)}</td>
+        <td>${readingCell("code", reading.code, row["Code (Reference PDF)"], code)}</td>
+        <td>${readingCell("amount", reading.amount, row["Amount (Reference PDF)"], amount)}</td>
+      </tr>`).join("")
+    : '<tr><td colspan="3">As leituras de cada estratégia não foram registradas nesta auditoria.</td></tr>';
+}
+
+function showCorrection(row) {
+  const flagged = row["Overall Status"] === "ERROR";
+  $("correction-box").hidden = !flagged;
+  if (!flagged) return;
+  $("correction-code").value = row["Corrected Code"] || row["Code (OCR Slips)"] || "";
+  $("correction-amount").value = row["Corrected Amount"] || row["Amount (OCR Slips)"] || "";
+  $("correction-clear").hidden = !isCorrected(row);
+  $("correction-status").textContent = isCorrected(row)
+    ? `Corrigida${row["Corrected By"] ? ` por ${row["Corrected By"]}` : ""}. O OCR tinha lido ${row["Code (OCR Slips)"]} · ${row["Amount (OCR Slips)"]}.`
+    : "";
+  renderReadings();
+}
+
+function applyRowUpdate(event, row) {
+  event.row = row;
+  if (event.element) {
+    event.element.innerHTML = rowMarkup(event);
+    event.element.hidden = !FILTERS[activeFilter](event.row);
+  }
+  showReview(event.row);
+  showCorrection(event.row);
+  updateFilterCounts();
+}
+
+async function saveCorrection(clear) {
+  const event = pages.get(selectedPage);
+  if (!event || !currentJobId) return;
+  const row = event.row;
+  const code = $("correction-code").value.trim();
+  const amount = $("correction-amount").value.trim();
+  // Only fields that differ from the OCR reading are corrections.
+  const body = clear ? { code: null, amount: null } : {
+    code: code && code !== row["Code (OCR Slips)"] ? code : null,
+    amount: amount && amount !== row["Amount (OCR Slips)"] ? amount : null,
+  };
+  if (!clear && body.code === null && body.amount === null) {
+    $("correction-status").textContent = "Os valores são iguais à leitura do OCR: não há o que corrigir.";
+    return;
+  }
+  $("correction-status").textContent = "Salvando…";
+  try {
+    const response = await api(
+      `/api/v1/audits/${currentJobId}/pages/${selectedPage}/correction`, jsonRequest("PUT", body)
+    );
+    const saved = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(saved, "Não foi possível salvar a correção."));
+    applyRowUpdate(event, saved);
+  } catch (error) {
+    $("correction-status").textContent = error.message;
+  }
+}
+
+$("readings-body").addEventListener("click", (click) => {
+  const button = click.target && click.target.closest ? click.target.closest(".reading-pick") : null;
+  if (!button) return;
+  $(button.dataset.field === "code" ? "correction-code" : "correction-amount").value = button.dataset.value;
+  renderReadings();
+});
+$("correction-save").addEventListener("click", () => saveCorrection(false));
+$("correction-clear").addEventListener("click", () => saveCorrection(true));
 
 $("review-document").addEventListener("click", () => setReview("DOCUMENT"));
 $("review-ocr").addEventListener("click", () => setReview("OCR"));

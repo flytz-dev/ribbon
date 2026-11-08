@@ -625,3 +625,95 @@ def test_export_holds_only_the_users_audits(client):
 def test_export_and_report_require_sign_in(anonymous):
     assert anonymous.get("/api/v1/export.zip").status_code == 401
     assert anonymous.get("/api/v1/audits/x/report.html").status_code == 401
+
+
+# ==========================================
+# Manual correction
+# ==========================================
+
+
+def _misread_page(job_id="past", page=1, **extra):
+    """Slip 113640 / 76,82 in the list, read as 113640 / 16,82; one strategy read 76,82."""
+    readings = [{"strategy": "1. Default", "code": "113640", "amount": "16,82"},
+                {"strategy": "3. Sharpness", "code": "113640", "amount": "76,82"}]
+    _stored_page(job_id, page, **{
+        "Reference Line": page, "Code (Reference PDF)": "113640", "Code (OCR Slips)": "113640",
+        "Code Status": "OK", "Amount (Reference PDF)": "76,82", "Amount (OCR Slips)": "16,82",
+        "Amount Status": "MISMATCH", "Readings": readings, **extra,
+    })
+
+
+def test_correction_matching_the_list_is_an_ocr_error(client):
+    _misread_page()
+
+    response = client.put("/api/v1/audits/past/pages/1/correction", json={"amount": "76,82"})
+
+    assert response.status_code == 200
+    row = response.json()
+    assert (row["Corrected Amount"], row["Corrected Code"], row["Corrected By"]) == ("76,82", "", USER)
+    assert row["Review"] == "OCR"
+    assert row["Amount (OCR Slips)"] == "16,82", "the OCR reading is kept"
+    stored = storage.load_report("past")[0]
+    assert stored["Corrected Amount"] == "76,82"
+    assert stored["Readings"][1]["amount"] == "76,82"
+
+
+def test_correction_that_still_differs_is_a_real_discrepancy(client):
+    _misread_page()
+    row = client.put("/api/v1/audits/past/pages/1/correction", json={"amount": "R$ 1234,50"}).json()
+    assert row["Corrected Amount"] == "1.234,50"
+    assert row["Review"] == "DOCUMENT"
+
+
+def test_correction_can_be_undone_keeping_the_verdict(client):
+    _misread_page()
+    client.put("/api/v1/audits/past/pages/1/correction", json={"amount": "76,82"})
+
+    row = client.put("/api/v1/audits/past/pages/1/correction", json={"code": None, "amount": None}).json()
+
+    assert (row["Corrected Amount"], row["Corrected By"]) == ("", "")
+    assert row["Review"] == "OCR"
+
+
+def test_correction_updates_a_live_audit(client):
+    _misread_page("live")
+    main.AUDITS["live"] = _audit("completed", report=storage.load_report("live"), owner=USER)
+
+    client.put("/api/v1/audits/live/pages/1/correction", json={"amount": "76,82"})
+
+    assert main.AUDITS["live"]["report"][0]["Corrected Amount"] == "76,82"
+    assert main.AUDITS["live"]["report"][0]["Review"] == "OCR"
+
+
+@pytest.mark.parametrize("body, status", [
+    ({"amount": "76.82"}, 400),
+    ({"amount": "abc"}, 400),
+    ({"code": "   "}, 400),
+])
+def test_invalid_corrections_are_rejected(client, body, status):
+    _misread_page()
+    assert client.put("/api/v1/audits/past/pages/1/correction", json=body).status_code == status
+
+
+def test_only_flagged_pages_can_be_corrected(client):
+    _stored_page("past", 1, status="OK")
+    response = client.put("/api/v1/audits/past/pages/1/correction", json={"amount": "76,82"})
+    assert response.status_code == 400
+
+
+def test_correction_of_unknown_page_or_audit(client):
+    _misread_page()
+    assert client.put("/api/v1/audits/past/pages/9/correction", json={"amount": "1,00"}).status_code == 404
+    _stored_page("theirs", 1, owner="someone-else")
+    assert client.put("/api/v1/audits/theirs/pages/1/correction", json={"amount": "1,00"}).status_code == 404
+
+
+def test_report_shows_the_correction(client):
+    _misread_page()
+    storage.update_status("past", "completed")
+    client.put("/api/v1/audits/past/pages/1/correction", json={"amount": "76,82"})
+
+    page = client.get("/api/v1/audits/past/report.html").text
+
+    assert "corrigido: <span class='mono'>76,82</span>" in page
+    assert "Corrigidas pelo revisor" in page

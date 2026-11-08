@@ -346,7 +346,14 @@ def vote_readings(readings):
 
     readings is a list of (strategy index, fields). Votes count the strategies that
     agree with the winner; confidence averages Tesseract's score across them."""
-    result = {"strategies_run": len(readings)}
+    result = {
+        "strategies_run": len(readings),
+        # What every strategy read, so the reviewer can pick a minority reading by hand.
+        "readings": [
+            {"strategy": STRATEGIES[index][0], "code": fields.get("code") or "", "amount": fields.get("amount") or ""}
+            for index, fields in readings
+        ],
+    }
     for field, empty in (("code", EMPTY_CODE), ("amount", EMPTY_AMOUNT)):
         candidates = [(index, fields) for index, fields in readings if fields.get(field)]
         if not candidates:
@@ -591,7 +598,11 @@ REPORT_COLUMNS = [
     "Amount (Reference PDF)", "Amount (OCR Slips)", "Amount Status", "Overall Status",
     "Category", "Matched By", "Code Confidence", "Amount Confidence",
     "Code Votes", "Amount Votes", "Strategies Run", "Render ms", "OCR ms", "Review",
+    "Corrected Code", "Corrected Amount", "Corrected By", "Corrected At",
 ]
+
+# Page rows also carry each strategy's reading; the CSV leaves it out.
+ROW_COLUMNS = REPORT_COLUMNS + ["Readings"]
 
 # Discrepancy categories for human review.
 CATEGORY_DUPLICATE = "DUPLICATE"
@@ -769,6 +780,11 @@ def stream_audit(payment_slips_path, reference_path, dpi=DEFAULT_DPI, include_im
             "Render ms": page["render_ms"],
             "OCR ms": page["ocr_ms"],
             "Review": "",
+            "Corrected Code": "",
+            "Corrected Amount": "",
+            "Corrected By": "",
+            "Corrected At": "",
+            "Readings": reading.get("readings", []),
         }
 
         event = {"type": "page", "page": number, "total_pages": total_pages, "row": row}
