@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from api import auth
+from api import bi
 from core import storage, engine, profiles, reports
 
 app = FastAPI(
@@ -38,6 +39,7 @@ app = FastAPI(
 # The front end is served from this same origin, so no CORS policy is configured:
 # a permissive one would let other sites use a signed-in user's session cookie.
 app.include_router(auth.router)
+app.include_router(bi.router)
 
 storage.create_schema()
 
