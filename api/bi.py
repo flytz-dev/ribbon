@@ -2,11 +2,12 @@
 """Indicadores de Business Intelligence do R.I.B.B.O.N."""
 
 from collections import Counter
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 
 from api import auth
-from core import storage
+from core import profiles, reports, storage
 
 router = APIRouter(prefix="/api/v1/bi", tags=["Business Intelligence"])
 
@@ -34,10 +35,9 @@ def overview(
         params.append(username)
 
     if days:
-        conditions.append(
-            "datetime(a.created_at) >= datetime('now', ?)"
-        )
-        params.append(f"-{days} days")
+        # created_at is local time, as written by the API; SQLite's 'now' would be UTC.
+        conditions.append("a.created_at >= ?")
+        params.append((datetime.now() - timedelta(days=days)).isoformat(timespec="seconds"))
 
     where = " AND ".join(conditions)
 
@@ -100,15 +100,23 @@ def overview(
     by_date = Counter(
         a["created_at"][:10] for a in audits if a["created_at"]
     )
+    # Days without audits count as zero, so the timeline is not compressed.
+    if by_date:
+        first, last = date.fromisoformat(min(by_date)), date.fromisoformat(max(by_date))
+        for offset in range((last - first).days + 1):
+            by_date.setdefault((first + timedelta(days=offset)).isoformat(), 0)
+
+    names = {key: profile.name for key, profile in profiles.load_profiles().items()}
     by_profile = Counter(
-        a["profile"] or "Padrão" for a in audits
+        names.get(a["profile"] or profiles.DEFAULT_PROFILE_ID, a["profile"])
+        for a in audits
     )
     by_dpi = Counter(
         str(a["dpi"]) if a["dpi"] is not None else "Não informado"
         for a in audits
     )
     by_category = Counter(
-        p["category"] or "Não categorizada"
+        reports.CATEGORY.get(p["category"], p["category"]) or "Não categorizada"
         for p in pages if p["overall_status"] == "ERROR"
     )
     by_user = Counter(
