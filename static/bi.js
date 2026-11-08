@@ -430,7 +430,8 @@
           borderColor: COLORS.blue,
           backgroundColor: "rgba(15,98,254,.12)",
           fill: true,
-          tension: .35,
+          // Straight segments: counts per day are whole numbers, and a curve would dip between them.
+          tension: 0,
           borderWidth: 3,
           pointRadius: 4,
           pointHoverRadius: 7,
@@ -737,12 +738,12 @@
 
     if (!chartLibraryPromise) {
       chartLibraryPromise = new Promise((resolve, reject) => {
+        // Shipped with the project (static/vendor), so the panel works without internet like the rest of RIBBON.
         const script = document.createElement("script");
-        script.src =
-          "https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js";
+        script.src = "vendor/chart.umd.min.js";
         script.onload = resolve;
         script.onerror = () => reject(
-          new Error("Não foi possível carregar o Chart.js. Verifique sua conexão.")
+          new Error("Os gráficos não puderam ser carregados; os indicadores acima continuam válidos.")
         );
         document.head.appendChild(script);
       }).catch((error) => {
@@ -763,13 +764,17 @@
     const scope = $("bi-scope").value;
     const days = $("bi-days").value;
 
+    // The indicators do not depend on the chart library: a failure there only hides the charts.
+    let chartError = null;
+    const charts = ensureChartJS().catch((error) => { chartError = error; });
+
     try {
       const [response] = await Promise.all([
         fetch(
           `/api/v1/bi/overview?scope=${encodeURIComponent(scope)}&days=${days}`,
           { credentials: "same-origin", cache: "no-store" }
         ),
-        ensureChartJS()
+        charts
       ]);
 
       if (!response.ok) {
@@ -784,7 +789,7 @@
       if (id !== requestId) return;
 
       render(data);
-      $("bi-status").textContent = "";
+      $("bi-status").textContent = chartError ? chartError.message : "";
     } catch (error) {
       if (id === requestId) {
         $("bi-status").textContent = error.message;

@@ -58,7 +58,7 @@ testee/
 Pictures/
 
 # Tools and packages copied by prepare-usb.bat
-vendor/
+/vendor/
 
 # Synthetic batches for live demonstrations (tools/seed_demo.py)
 demo/
