@@ -166,6 +166,8 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
 
   emit({ type: 'end', total_pages: 2, model: 'Tesseract OCR', elapsed_seconds: 4.2, missing });
   assert.equal(nodes.get('link-csv').href, '/api/v1/audits/sample/report.csv');
+  assert.equal(nodes.get('link-report').href, '/api/v1/audits/sample/report.html');
+  assert.equal(nodes.get('link-report').hidden, false);
   assert.equal(nodes.get('missing-block').hidden, false);
   assert.match(nodes.get('missing-list').innerHTML, /Linha 3: código <strong>118870<\/strong>/);
   assert.equal(nodes.get('ind-page-time').textContent, '2,1');

@@ -111,6 +111,9 @@ def run_audit(number, days_ago, clock, dpi, slips, seed, style, owner, workdir):
             row["Review"] = _verdict(row, truth) or ""
             reviewed += bool(row["Review"])
         storage.save_page(job_id, row)
+        if row["Review"]:
+            reviewed_at = created + timedelta(minutes=15 + row["Page"])
+            storage.set_review(job_id, row["Page"], row["Review"], owner, reviewed_at.isoformat(timespec="seconds"))
     storage.finish_audit(job_id, elapsed, missing)
     storage.update_status(job_id, "completed")
 
@@ -161,9 +164,9 @@ def write_live_batches():
         # Ten master-list lines each: ten codes and ten amounts to read.
         ("lote-apresentacao", 10, 2026, "padrao", None),
         ("lote-modelo-z", 10, 2027, "codigo-z", None),
-        # No profile reads this layout yet: it is for creating a new model in the assistant.
+        # The shipped Guia municipal profile reads this layout; the batch also serves to create one again in the assistant.
         ("novo-modelo-municipal", 10, 48153, "municipal",
-         "ainda sem modelo: crie-o em Modelos de documento a partir do código MAT-80621"),
+         "modelo: Guia municipal; para treinar, crie outro em Modelos de documento a partir do código MAT-80621"),
     ]
     lines = [
         "Lotes para a demonstração ao vivo (dados sintéticos, sem dados de contribuintes).",

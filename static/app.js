@@ -256,6 +256,7 @@ function resetPanel() {
   $("strategy-dots").hidden = true;
   $("caption-viewer").hidden = true;
   $("link-csv").hidden = true;
+  $("link-report").hidden = true;
   renderMissing([]);
   setFilter("all");
 
@@ -335,6 +336,9 @@ function showCsvLink(jobId) {
   const link = $("link-csv");
   link.href = `/api/v1/audits/${jobId}/report.csv`;
   link.hidden = false;
+  const report = $("link-report");
+  report.href = `/api/v1/audits/${jobId}/report.html`;
+  report.hidden = false;
 }
 
 function renderMissing(entries) {

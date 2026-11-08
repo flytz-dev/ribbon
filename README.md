@@ -285,7 +285,9 @@ Interactive API documentation is available at [localhost:8000/docs](http://local
 | `GET` | `/api/v1/audits/{job_id}/missing` | Reference entries that no slip was paired with. |
 | `PUT` | `/api/v1/audits/{job_id}/pages/{page}/review` | Record a review: JSON `verdict` of `DOCUMENT`, `OCR`, or `null` to clear it. |
 | `GET` | `/api/v1/audits/{job_id}/report.csv` | Download the available report rows, then missing slips, as CSV. |
+| `GET` | `/api/v1/audits/{job_id}/report.html` | Printable A4 report (discrepancies, verdicts with reviewer and date, missing slips); the browser saves it as PDF. |
 | `GET` | `/api/v1/metrics` | Timing, flagged pages, reviews, and confidence for each resolution. |
+| `GET` | `/api/v1/export.zip` | The user's audits, pages, and missing slips as Portuguese CSV files for Power BI or Excel, with a data dictionary (`LEIA-ME.txt`). |
 | `GET` | `/api/v1/profiles` | Document profiles; audits take `?profile=<id>` (default `padrao`). |
 | `GET`, `DELETE` | `/api/v1/profiles/{id}` | Read a profile definition, or delete a custom profile. |
 | `POST` | `/api/v1/profiles` | Save a profile definition as `profiles/<id>.json`. |

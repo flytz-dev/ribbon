@@ -17,12 +17,12 @@ import traceback
 
 import pandas as pd
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from api import auth
-from core import storage, engine, profiles
+from core import storage, engine, profiles, reports
 
 app = FastAPI(
     title="RIBBON API",
@@ -512,7 +512,7 @@ def review_page(job_id: str, page: int, body: ReviewRequest, username: str = Dep
 
     saved = False
     try:
-        saved = storage.set_review(job_id, page, body.verdict)
+        saved = storage.set_review(job_id, page, body.verdict, username, datetime.now().isoformat(timespec="seconds"))
     except sqlite3.Error as e:
         print(f"[history] failed to save review: {e}")
     if row is None:
@@ -549,6 +549,40 @@ def download_report(job_id: str, username: str = Depends(auth.current_user)):
         iter([buffer.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="Report_{job_id}.csv"'},
+    )
+
+
+def _profile_names() -> dict[str, str]:
+    return {profile_id: profile.name for profile_id, profile in profiles.load_profiles().items()}
+
+
+@app.get("/api/v1/audits/{job_id}/report.html", response_class=HTMLResponse, tags=["Audit"])
+def printable_report(job_id: str, username: str = Depends(auth.current_user)):
+    """The audit as an A4 page with the discrepancies, verdicts and missing slips; the browser prints it as PDF."""
+    _require_audit(job_id, username)
+    summary = _stored_summary(job_id, username)
+    if summary["status"] == "processing":
+        raise HTTPException(status_code=409, detail="Audit still running.")
+    profile_id = summary.get("profile") or profiles.DEFAULT_PROFILE_ID
+    page = reports.render_audit_report(
+        summary,
+        storage.load_page_rows(job_id),
+        storage.load_missing(job_id),
+        _profile_names().get(profile_id, profile_id),
+        datetime.now(),
+    )
+    return HTMLResponse(page)
+
+
+@app.get("/api/v1/export.zip", tags=["Metrics"])
+def export_data(username: str = Depends(auth.current_user)):
+    """The user's audits, pages and missing slips as Portuguese CSV files for Power BI or Excel."""
+    archive = reports.export_zip(storage.export_tables(username), _profile_names())
+    name = f"ribbon-dados-{datetime.now():%Y-%m-%d}.zip"
+    return Response(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 

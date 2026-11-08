@@ -375,6 +375,7 @@
                 <div class="actions">
                   <button type="button" class="secondary-button" id="next-pending">Próxima pendente</button>
                   <a class="secondary-button" id="link-csv" hidden>Baixar CSV</a>
+                  <a class="secondary-button" id="link-report" target="_blank" rel="noopener" hidden>Relatório PDF</a>
                 </div>
               </div>
               <div class="filters" role="group" aria-label="Filtrar páginas">
@@ -426,6 +427,8 @@
             <p class="page-subtitle">Compare 200, 300 e 500 DPI com os seus próprios documentos.</p>
           </div>
           <div class="button-set">
+            <a class="secondary-button" id="link-export" href="/api/v1/export.zip" download
+               title="Planilhas (CSV) das suas auditorias, guias e lançamentos sem guia, para o Power BI ou o Excel">Exportar dados para análise</a>
             <button type="button" class="secondary-button" id="refresh-metrics-button">Atualizar</button>
           </div>
         </div>
