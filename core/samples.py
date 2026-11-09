@@ -114,13 +114,14 @@ def render_slip(code, amount, rng, handwritten=False, style="padrao"):
     field = _font(HANDWRITING_FONTS, 92) if handwritten else _font(PRINTED_FONTS, 60)
 
     draw.rectangle((margin - 30, margin - 30, width - margin + 30, height - margin + 30), outline=0, width=4)
-    draw.text((margin, margin), "PAYMENT SLIP - SYNTHETIC SAMPLE", font=title, fill=0)
-    draw.text((margin, margin + 90), "Generated for testing. Contains no taxpayer data.", font=label, fill=70)
+    # Printed in Portuguese, like the slips the system is meant for.
+    draw.text((margin, margin), "GUIA DE PAGAMENTO - DOCUMENTO DE TESTE", font=title, fill=0)
+    draw.text((margin, margin + 90), "Documento fictício para testes. Não contém dados de contribuintes.", font=label, fill=70)
 
     numeric_line = code.zfill(16)
-    draw.text((margin, margin + 230), "Numeric line", font=label, fill=60)
-    draw.text((margin, margin + 520), "Amount due", font=label, fill=60)
-    draw.text((width // 2 + 120, margin + 520), "Due date", font=label, fill=60)
+    draw.text((margin, margin + 230), "Linha digitável", font=label, fill=60)
+    draw.text((margin, margin + 520), "Valor a pagar (R$)", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 520), "Vencimento", font=label, fill=60)
     draw.text((width // 2 + 120, margin + 570), f"{rng.randint(10, 28)}/{rng.randint(10, 12)}/2026", font=field, fill=0)
 
     if handwritten:
@@ -148,14 +149,14 @@ def _render_code_z_slip(code, amount, rng, handwritten):
     field = _font(HANDWRITING_FONTS, 92) if handwritten else _font(PRINTED_FONTS, 60)
 
     draw.rectangle((margin - 30, margin - 30, width - margin + 30, height - margin + 30), outline=0, width=4)
-    draw.text((margin, margin), "COLLECTION FORM - SYNTHETIC SAMPLE", font=title, fill=0)
-    draw.text((margin, margin + 90), "Generated for testing. Contains no taxpayer data.", font=label, fill=70)
+    draw.text((margin, margin), "GUIA DE RECOLHIMENTO - DOCUMENTO DE TESTE", font=title, fill=0)
+    draw.text((margin, margin + 90), "Documento fictício para testes. Não contém dados de contribuintes.", font=label, fill=70)
 
-    draw.text((margin, margin + 230), "Registration", font=label, fill=60)
-    draw.text((width // 2 + 120, margin + 230), "Late fee", font=label, fill=60)
+    draw.text((margin, margin + 230), "Matrícula", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 230), "Multa", font=label, fill=60)
     draw.text((width // 2 + 120, margin + 280), _random_amount(rng, "codigo-z"), font=field, fill=0)
-    draw.text((margin, margin + 520), "Amount due", font=label, fill=60)
-    draw.text((width // 2 + 120, margin + 520), "Due date", font=label, fill=60)
+    draw.text((margin, margin + 520), "Valor a pagar (R$)", font=label, fill=60)
+    draw.text((width // 2 + 120, margin + 520), "Vencimento", font=label, fill=60)
     draw.text((width // 2 + 120, margin + 570), f"{rng.randint(10, 28)}/{rng.randint(10, 12)}/2026", font=field, fill=0)
 
     printed_code = f"{code}-Z"
@@ -184,7 +185,7 @@ def _render_municipal_slip(code, amount, rng, handwritten):
     field = _font(HANDWRITING_FONTS, 92) if handwritten else _font(PRINTED_FONTS, 60)
 
     draw.rectangle((margin - 30, margin - 30, width - margin + 30, height - margin + 30), outline=0, width=4)
-    draw.text((margin, margin), "GUIA DE ARRECADAÇÃO MUNICIPAL - AMOSTRA", font=title, fill=0)
+    draw.text((margin, margin), "GUIA DE ARRECADAÇÃO MUNICIPAL - DOCUMENTO DE TESTE", font=title, fill=0)
     draw.text((margin, margin + 90), "Documento fictício para testes. Não contém dados de contribuintes.", font=label, fill=70)
 
     draw.text((margin, margin + 230), "Competência", font=label, fill=60)
