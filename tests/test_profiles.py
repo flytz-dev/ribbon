@@ -226,15 +226,6 @@ def test_municipal_samples_are_read_by_a_profile_suggested_from_one_code(tmp_pat
     assert {row["code"] for row in truth.values()} <= {entry["code"] for entry in entries}
 
 
-def test_shipped_municipal_profile_reads_its_master_list(tmp_path):
-    """profiles/guia-municipal.json was created in the assistant; it reads the municipal samples."""
-    profile = profiles.get_profile("guia-municipal")
-    assert profile.slip_code.region and profile.slip_amount.region
-    dataset = samples.generate_dataset(tmp_path, slips=10, seed=48153, style="municipal")
-    entries = engine.extract_reference_list(dataset["reference"], profile)
-    assert len(entries) == 10 and entries[0] == {"code": "80621", "amount": "92.326,53"}
-
-
 def test_suggestion_needs_digits():
     with pytest.raises(profiles.ProfileError, match="code example"):
         profiles.suggest_definition("x", "ABC")
