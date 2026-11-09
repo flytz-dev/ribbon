@@ -96,7 +96,9 @@
           </div>
         </div>
 
-        <section class="kpis" aria-label="Indicadores de hoje">
+        <!-- The BI panel (bi.js) is placed before this section and now shows these indicators and
+             charts; the originals stay hidden because the BI panel anchors on them and app.js fills them. -->
+        <section class="kpis" aria-label="Indicadores de hoje" hidden>
           <div class="kpi">
             <span class="kpi-label">Auditorias hoje</span>
             <span class="kpi-value" id="dash-today-audits">0</span>
@@ -119,7 +121,7 @@
           </div>
         </section>
 
-        <div class="row">
+        <div class="row" hidden>
           <section class="card grow-2">
             <div class="card-header">
               <div>
@@ -177,7 +179,7 @@
             <p class="hint" style="padding: 0 16px 16px">A imagem com os destaques do OCR existe apenas durante a conferência ao vivo.</p>
           </section>
 
-          <section class="card grow-1">
+          <section class="card grow-1" hidden>
             <div class="card-header">
               <div>
                 <h2>Tempo por página</h2>
