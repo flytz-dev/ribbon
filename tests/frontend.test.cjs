@@ -188,6 +188,42 @@ test('upload, stream, review, missing slips, CSV, and history remain connected',
   assert.equal(timers.size, 0);
 });
 
+test('slip images stay in memory for reopened audits of the session only', async () => {
+  const { nodes, streams, context } = setup();
+  await flush();
+  nodes.get('loginForm').listeners.submit({ preventDefault() {} });
+  await flush();
+
+  await nodes.get('auditForm').listeners.submit({ preventDefault() {} });
+  const emit = (event) => streams[0].onmessage({ data: JSON.stringify(event) });
+  emit({ type: 'start', total_pages: 2, reference_count: 3, dpi: 300 });
+  for (const row of rows) {
+    emit({ type: 'page', page: row.Page, row, strategy: '1. Default', image: `data:image/jpeg;base64,page${row.Page}`,
+      code_found: true, amount_found: true });
+  }
+  emit({ type: 'end', total_pages: 2, model: 'Tesseract OCR', elapsed_seconds: 4.2, missing });
+
+  // Leaving for the dashboard and reopening the audit from the history keeps its images.
+  nodes.get('tab-dashboard').listeners.click();
+  await context.openAudit({ job_id: 'sample', total_pages: 2, created_at: '2026-09-30T10:00:00', dpi: 300 });
+  assert.match(nodes.get('viewer').innerHTML, /<img src="data:image\/jpeg;base64,page1"/);
+  context.showPage(2);
+  assert.match(nodes.get('viewer').innerHTML, /base64,page2/);
+  assert.match(nodes.get('tag-strategy').textContent, /1\. Padrão/);
+
+  // Signing out forgets them, as a reload does.
+  await nodes.get('logout-button').listeners.click();
+  nodes.get('loginForm').listeners.submit({ preventDefault() {} });
+  await flush();
+  await context.openAudit({ job_id: 'sample', total_pages: 2, created_at: '2026-09-30T10:00:00', dpi: 300 });
+  assert.match(nodes.get('viewer').innerHTML, /não são guardadas/);
+
+  // Only the latest audits are kept: a fourth one drops the oldest.
+  const images = vm.runInContext('sessionImages', context);
+  for (const job of ['a', 'b', 'c', 'd']) context.rememberImage(job, { page: 1, image: 'data:image/jpeg;base64,x' });
+  assert.deepEqual([...images.keys()], ['b', 'c', 'd']);
+});
+
 test('metrics compare resolutions and feed the dashboard', async () => {
   const { nodes } = setup();
   await flush();

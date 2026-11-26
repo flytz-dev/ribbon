@@ -19,6 +19,31 @@ const statusText = $("statusText");
 
 // Keep annotated page images available when revisiting report rows.
 const pages = new Map();
+
+// Annotated images of the latest audits, kept only in this page's memory so that reopening
+// one of them in the same session still shows its slips. The server never stores them, and
+// they are gone after a reload or sign-out. Oldest audits are dropped first.
+const SESSION_IMAGE_AUDITS = 3;
+const SESSION_IMAGE_PAGES = 300;
+const sessionImages = new Map(); // job_id -> Map(page -> live-only fields of that page)
+
+function rememberImage(jobId, event) {
+  if (!jobId || !event.image) return;
+  if (!sessionImages.has(jobId)) sessionImages.set(jobId, new Map());
+  sessionImages.get(jobId).set(event.page, {
+    image: event.image,
+    strategy: event.strategy,
+    code_found: event.code_found,
+    amount_found: event.amount_found,
+  });
+  const total = () => [...sessionImages.values()].reduce((sum, audit) => sum + audit.size, 0);
+  while (sessionImages.size > 1 && (sessionImages.size > SESSION_IMAGE_AUDITS || total() > SESSION_IMAGE_PAGES)) {
+    const oldest = sessionImages.keys().next().value;
+    if (oldest === jobId) break;
+    sessionImages.delete(oldest);
+  }
+}
+
 let counters = { processed: 0, matched: 0, mismatched: 0, total: null };
 let eventSource = null;
 let currentJobId = null;
@@ -143,6 +168,7 @@ $("register-button").addEventListener("click", () => submitCredentials("register
 
 $("logout-button").addEventListener("click", async () => {
   if (eventSource) finishAudit(currentJobId, false);
+  sessionImages.clear();
   await fetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
   panel.hidden = true;
   showLogin();
@@ -442,9 +468,10 @@ async function openAudit(audit) {
   $("active-resolution").textContent = audit.dpi ? `${audit.dpi} DPI` : "—";
   $("active-profile").textContent = profileName(audit.profile);
 
+  // Stored rows have no images; those of an audit made earlier in this session are still in memory.
+  const kept = sessionImages.get(audit.job_id);
   for (const row of rows) {
-    // Historical rows have no images; previews are generated only during a live audit.
-    const event = { page: row["Page"], row };
+    const event = { page: row["Page"], row, ...(kept && kept.get(row["Page"])) };
     const mismatch = row["Overall Status"] === "ERROR";
 
     counters.processed += 1;
@@ -472,10 +499,12 @@ async function openAudit(audit) {
     showPage(rows[0]["Page"]);
   }
 
-  // Replace the generic preview message after displaying the first historical row.
-  viewer.innerHTML = '<p class="empty">As imagens com os destaques do OCR não são guardadas:<br>' +
-    'elas existem apenas durante a conferência ao vivo.</p>';
-  $("caption-viewer").hidden = true;
+  // Without images in memory, explain why instead of showing an empty preview.
+  if (!kept) {
+    viewer.innerHTML = '<p class="empty">As imagens com os destaques do OCR não são guardadas:<br>' +
+      'elas ficam disponíveis só enquanto esta página estiver aberta, para as auditorias feitas nela.</p>';
+    $("caption-viewer").hidden = true;
+  }
 }
 
 $("refresh-history-button").addEventListener("click", loadHistory);
@@ -495,6 +524,7 @@ function registerPage(event) {
   }
 
   pages.set(event.page, event);
+  rememberImage(currentJobId, event);
   addRow(event, mismatch);
   showPage(event.page);
 }
